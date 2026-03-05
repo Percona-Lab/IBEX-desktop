@@ -1,5 +1,5 @@
 {
-	"name": "open-webui-desktop",
+	"name": "ibex-desktop",
 	"version": "0.1.0",
 	"description": "",
 	"type": "module",
@@ -115,7 +115,7 @@
 		"uuid": "^9.0.1"
 	},
 	"engines": {
-		"node": ">=18.13.0 <=22.x.x",
+		"node": ">=18.13.0",
 		"npm": ">=6.0.0"
 	}
 }

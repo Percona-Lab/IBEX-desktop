@@ -1,8 +1,8 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
-	"productName": "Open WebUI",
+	"productName": "IBEX",
 	"version": "0.1.0",
-	"identifier": "com.open-webui-desktop.app",
+	"identifier": "com.percona.ibex",
 	"build": {
 		"beforeDevCommand": "pnpm run dev",
 		"devUrl": "http://localhost:1420",
@@ -14,7 +14,7 @@
 		"windows": [
 			{
 				"label": "main",
-				"title": "Open WebUI",
+				"title": "IBEX",
 				"url": "/",
 				"width": 800,
 				"height": 650,

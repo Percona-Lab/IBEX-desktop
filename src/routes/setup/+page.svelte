@@ -60,8 +60,7 @@
 		<div class="w-full sm:max-w-md px-10 min-h-screen flex flex-col text-center">
 			<div class="my-auto pb-10 w-full dark:text-gray-100">
 				<h1 class="text-3xl font-bold mb-8 text-gray-900 dark:text-white">
-					Welcome to Open WebUI
-					<!-- {$i18n.t('Welcome to Open WebUI')} -->
+					Welcome to IBEX
 				</h1>
 
 				<form
@@ -72,8 +71,7 @@
 					}}
 				>
 					<div class="text-center text-gray-600 dark:text-gray-400 mb-4">
-						Please enter the base URL of your Open WebUI instance to get started
-						<!-- {$i18n.t('Please enter the base URL of your Open WebUI instance to get started')} -->
+						Please enter the base URL of your IBEX instance to get started
 					</div>
 
 					<div class="space-y-1">

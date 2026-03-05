@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    open_webui_desktop_lib::run()
+    ibex_desktop_lib::run()
 }

@@ -1,96 +1,70 @@
-# Open WebUI Desktop
+# IBEX Desktop
 
-<div align="center">
-  
-### 🎉 First Release Available! 
-### v0.1.0 is now available for Mac OS - [Download Here](https://github.com/reecelikesramen/open-webui-desktop/releases/tag/v0.1.0)
+Native macOS application for [IBEX](https://github.com/Percona-Lab/IBEX) — a workplace AI assistant that connects to your team's Slack, Jira, Notion, and more.
 
-</div>
+Built with [Tauri 2](https://tauri.app/) (Rust + Svelte), wrapping [Open WebUI](https://github.com/open-webui/open-webui) in a native window with automatic setup, process management, and a menu bar status indicator.
 
-<br />
-
-**Status: Early Development and WIP**  
-
-Open WebUI Desktop is a desktop application for [Open WebUI](https://github.com/open-webui/open-webui), a popular self-hosted LLM WebUI. Built using Tauri 2, it incorporates Svelte-based front-end code from Open WebUI to deliver a seamless desktop experience.
+**Status: Early Development**
 
 ---
 
-## Screenshots
+## What It Does
 
-### Desktop GUI
+- Wraps Open WebUI in a native macOS window (WKWebView, not a browser)
+- Auto-creates an admin account and logs in silently
+- Manages Docker container and MCP server processes
+- Menu bar icon with live status (green/yellow/red)
+- Native settings UI for configuring connectors (Slack, Jira, Notion, etc.)
+- First-run setup wizard
+- Reads/writes `~/.ibex-mcp.env` (backward compatible with terminal `start.sh`)
 
-<img src="./screenshots/desktop-gui.png" width=300 alt="Desktop GUI Screenshot"/><br />
-A panel-inspired interface for Open WebUI on the desktop.
+## Architecture
 
-### Chatbar
+```
+IBEX.app
+├── src-tauri/src/           # Rust backend
+│   ├── lib.rs               # Tauri setup, startup sequence
+│   ├── config.rs            # Read/write ~/.ibex-mcp.env
+│   ├── keychain.rs          # macOS Keychain (admin creds)
+│   ├── docker.rs            # Docker management (bollard)
+│   ├── process.rs           # Node.js server lifecycle
+│   ├── account.rs           # Auto-account creation + auth
+│   ├── prompt.rs            # System prompt generation
+│   ├── state.rs             # Shared AppState
+│   └── tray.rs              # Menu bar icon + status
+├── src/                     # Svelte frontend
+│   ├── routes/settings/     # Settings window
+│   ├── routes/setup/        # First-run wizard
+│   └── lib/components/ibex/ # Connector forms, status
+├── src-tauri/binaries/      # Bundled Node.js (per-arch)
+└── src-tauri/resources/     # servers/, connectors/, node_modules/
+```
 
-<img src="./screenshots/chatbar-1.png" width=300 alt="Chatbar Screenshot 1"/>  
-<img src="./screenshots/chatbar-2.png" width=300 alt="Chatbar Screenshot 2"/><br />
-An always-on-top ChatGPT and Spotlight-inspired chatbar.
-
-- **Global hotkey:** Customizable, defaults to `Ctrl+Space`.
-- **Hide behavior:** Press `Esc` or shift focus to hide the chatbar.
-- **Position options:** Several preset positions to appear, or remeber the last.
-
-### Chat Companion
-
-<img src="./screenshots/chat-companion-1.png" width=300 alt="Chat Companion Screenshot 1"/>  
-<img src="./screenshots/chat-companion-2.png" width=300 alt="Chat Companion Screenshot 2"/><br />
-The Chat Companion displays recent chat activity:
-
-- **Message persistence:** Keeps chats available for 10 minutes after the last message.
-- **Position retention:** The companion remembers its location on the screen.
-
----
-
-## Dev Installation
+## Dev Setup
 
 ### Prerequisites
 
-Ensure you have the following installed:
+- **Rust** (latest stable): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- **Node.js** 18+ with pnpm: `npm install -g pnpm`
+- **Xcode Command Line Tools**: `xcode-select --install`
 
-- **Rust** (latest stable version)
-- **Python 3.11** (configured for a virtual environment)
-- **Node.js** with a package manager (e.g., npm or deno)
+### Build & Run
 
-### Steps
+```bash
+git clone https://github.com/Percona-Lab/IBEX-desktop.git
+cd IBEX-desktop
+pnpm install
+pnpm run tauri dev
+```
 
-1. Clone this repository.
-2. Run `npm run tauri dev` or `deno task tauri dev` to initiate the first-time build process (this may take some time).
-3. Once the app is built, launch it. You should see the Open WebUI setup screen.
-4. Connect your instance by inputting the base URL and logging in.
+First build takes several minutes (compiling Rust dependencies).
 
----
+## Relationship to IBEX
 
-## Features
-
-- **Open WebUI Desktop**: A desktop app with a main window hosting Open WebUI.
-- **Chatbar**: A floating window for chat interactions.
-- **Hotkey Support**: Toggle the chatbar with a customizable hotkey.
-- **Chat Companion**: A persistent, floating window displaying recent chat activity.
-- **Customizable App Settings**:
-  - Global hotkey configuration
-  - Companion chat settings
-  - Chatbar position adjustments
-- **Non-local Setup Support**: Enable compatibility with remote backend configurations.
-
-## Roadmap
-
-The following features and improvements are planned, roughly in order of priority:
-
-1. **Full Desktop Integration**: Expand Open WebUI to interact with the computer and its apps.
-1. **Platform-Specific Styling**: Align with design guidelines for macOS, Windows, and Linux (e.g., NSPanel, window effects).
-1. **Distribution**: Package the application for easy distribution.
-1. **System Integrations**: Mirror useful features from ChatGPT Desktop, such as clipboard management, screenshots, and app context integration.
-
----
-
-## Contributing
-
-Contributions are welcome! While formal guidelines are not yet in place, I will review and integrate useful contributions quickly. Feel free to open issues or submit pull requests.
-
----
+This is the native macOS frontend for [IBEX](https://github.com/Percona-Lab/IBEX). The terminal-based IBEX (`install.sh`, `start.sh`, `configure.sh`) continues to work independently. Both share the same `~/.ibex-mcp.env` config file.
 
 ## License
 
-This project is licensed under the MIT License, with extensions from Open WebUI's license. For details, see the [LICENSE](./LICENSE) file.
+MIT License. See [LICENSE](./LICENSE).
+
+Based on [open-webui-desktop](https://github.com/reecelikesramen/open-webui-desktop) by Reece Holmdahl.

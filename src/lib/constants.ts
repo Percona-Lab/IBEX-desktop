@@ -1,4 +1,4 @@
-export const APP_NAME = 'Open WebUI';
+export const APP_NAME = 'IBEX';
 
 // @ts-expect-error defined in vite.config.ts
 export const WEBUI_VERSION = APP_VERSION;
