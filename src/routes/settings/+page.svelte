@@ -5,6 +5,7 @@
 	// Connector configuration form state
 	let config: any = {};
 	let saving = false;
+	let restarting = false;
 	let message = '';
 	let messageType: 'success' | 'error' = 'success';
 	let health: string = 'Starting';
@@ -23,7 +24,7 @@
 				{ key: 'slack_token', label: 'User OAuth Token', type: 'password', placeholder: 'xoxp-...' }
 			],
 			helpUrl: 'https://api.slack.com/apps',
-			helpText: 'Create app → OAuth & Permissions → User Token Scopes: search:read, channels:history, channels:read, users:read → Install to Workspace → Copy User OAuth Token'
+			helpText: 'Create app \u2192 OAuth & Permissions \u2192 User Token Scopes: search:read, channels:history, channels:read, users:read \u2192 Install to Workspace \u2192 Copy User OAuth Token'
 		},
 		{
 			key: 'notion',
@@ -32,7 +33,7 @@
 				{ key: 'notion_token', label: 'Integration Token', type: 'password', placeholder: 'ntn_...' }
 			],
 			helpUrl: 'https://www.notion.so/profile/integrations',
-			helpText: 'New integration → Copy Internal Integration Secret → Add integration to pages via ··· menu → Connections'
+			helpText: 'New integration \u2192 Copy Internal Integration Secret \u2192 Add integration to pages via \u00b7\u00b7\u00b7 menu \u2192 Connections'
 		},
 		{
 			key: 'jira',
@@ -54,7 +55,7 @@
 				{ key: 'github_repo', label: 'Repository', type: 'text', placeholder: 'ai-memory-yourname' }
 			],
 			helpUrl: 'https://github.com/settings/tokens?type=beta',
-			helpText: 'Create a private repo → Fine-grained PAT → Scope to your org → Select repo → Permissions: Contents → Read and write'
+			helpText: 'Create a private repo \u2192 Fine-grained PAT \u2192 Scope to your org \u2192 Select repo \u2192 Permissions: Contents \u2192 Read and write'
 		},
 		{
 			key: 'servicenow',
@@ -100,7 +101,7 @@
 		message = '';
 		try {
 			await invoke('save_config', { newConfig: config });
-			message = 'Configuration saved! Restart servers to apply changes.';
+			message = 'Configuration saved! Click "Restart Servers" to apply changes.';
 			messageType = 'success';
 			await loadState();
 		} catch (e: any) {
@@ -111,11 +112,53 @@
 		}
 	}
 
+	async function restartServers() {
+		restarting = true;
+		message = '';
+		try {
+			await invoke('restart_servers');
+			message = 'Servers restarted successfully!';
+			messageType = 'success';
+			await loadState();
+		} catch (e: any) {
+			message = `Restart error: ${e}`;
+			messageType = 'error';
+		} finally {
+			restarting = false;
+		}
+	}
+
+	async function saveAndRestart() {
+		saving = true;
+		restarting = true;
+		message = '';
+		try {
+			await invoke('save_config', { newConfig: config });
+			await invoke('restart_servers');
+			message = 'Configuration saved and servers restarted!';
+			messageType = 'success';
+			await loadState();
+		} catch (e: any) {
+			message = `Error: ${e}`;
+			messageType = 'error';
+		} finally {
+			saving = false;
+			restarting = false;
+		}
+	}
+
 	function toggleSection(key: string) {
 		expandedSections[key] = !expandedSections[key];
 	}
 
-	onMount(loadState);
+	onMount(() => {
+		loadState();
+
+		// Auto-refresh state every 10 seconds
+		const interval = setInterval(loadState, 10000);
+
+		return () => clearInterval(interval);
+	});
 </script>
 
 <div class="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
@@ -157,7 +200,16 @@
 		<!-- Server Statuses -->
 		{#if Object.keys(serverStatuses).length > 0}
 			<div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-2">
-				<h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Servers</h2>
+				<div class="flex items-center justify-between">
+					<h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Servers</h2>
+					<button
+						on:click={restartServers}
+						disabled={restarting}
+						class="text-xs px-3 py-1 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors disabled:opacity-50"
+					>
+						{restarting ? 'Restarting...' : 'Restart All'}
+					</button>
+				</div>
 				<div class="space-y-1 text-sm">
 					{#each Object.entries(serverStatuses) as [name, status]}
 						<div class="flex items-center justify-between">
@@ -191,7 +243,7 @@
 				>
 					<div class="flex items-center gap-3">
 						<span class="{isConfigured(def) ? 'text-green-500' : 'text-gray-300 dark:text-gray-600'}">
-							{isConfigured(def) ? '✓' : '○'}
+							{isConfigured(def) ? '\u2713' : '\u25cb'}
 						</span>
 						<span class="font-medium">{def.name}</span>
 					</div>
@@ -211,7 +263,7 @@
 								{def.helpText}
 								{#if def.helpUrl}
 									<a href={def.helpUrl} target="_blank" rel="noopener" class="text-blue-500 hover:underline ml-1">
-										Setup guide →
+										Setup guide \u2192
 									</a>
 								{/if}
 							</p>
@@ -236,14 +288,21 @@
 			</div>
 		{/each}
 
-		<!-- Save button -->
-		<div class="flex justify-end pt-2">
+		<!-- Action buttons -->
+		<div class="flex justify-between items-center pt-2">
 			<button
 				on:click={saveConfig}
 				disabled={saving}
+				class="px-6 py-2.5 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50 font-medium text-sm rounded-lg transition-colors"
+			>
+				{saving ? 'Saving...' : 'Save Only'}
+			</button>
+			<button
+				on:click={saveAndRestart}
+				disabled={saving || restarting}
 				class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium text-sm rounded-lg transition-colors"
 			>
-				{saving ? 'Saving...' : 'Save Configuration'}
+				{saving || restarting ? 'Applying...' : 'Save & Restart'}
 			</button>
 		</div>
 

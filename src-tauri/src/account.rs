@@ -170,13 +170,15 @@ pub async fn push_system_prompt(
 
     // First, get existing settings to avoid overwriting
     let settings_url = format!("{base_url}/api/v1/users/user/settings");
-    let existing: serde_json::Value = client
+    let existing: serde_json::Value = match client
         .get(&settings_url)
         .header("Authorization", format!("Bearer {jwt}"))
         .send()
         .await
-        .and_then(|r| futures::executor::block_on(r.json()))
-        .unwrap_or(serde_json::json!({}));
+    {
+        Ok(resp) => resp.json().await.unwrap_or(serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
 
     // Merge system prompt into existing settings
     let mut settings = match existing {

@@ -6,7 +6,7 @@
 use crate::state::{AppHealth, AppState};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Create the system tray icon and menu.
 pub fn setup_tray(app: &AppHandle) -> Result<TrayIcon, String> {
@@ -20,11 +20,11 @@ pub fn setup_tray(app: &AppHandle) -> Result<TrayIcon, String> {
             } = event
             {
                 // Left click → show/focus main window
-                if let Some(window) = tray_icon.app_handle().get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                show_main_window(tray_icon.app_handle());
             }
+        })
+        .on_menu_event(|app, event| {
+            handle_menu_event(app, event.id().as_ref());
         })
         .build(app)
         .map_err(|e| format!("Failed to create tray: {e}"))?;
@@ -33,6 +33,63 @@ pub fn setup_tray(app: &AppHandle) -> Result<TrayIcon, String> {
     update_tray_menu(app, &tray)?;
 
     Ok(tray)
+}
+
+/// Handle tray menu item clicks.
+fn handle_menu_event(app: &AppHandle, menu_id: &str) {
+    match menu_id {
+        "open_webui" => {
+            show_main_window(app);
+        }
+        "settings" => {
+            open_settings_window(app);
+        }
+        "restart" => {
+            // Emit event that lib.rs restart handler will pick up
+            app.emit("tray-restart-servers", ()).ok();
+            log::info!("Restart servers requested from tray menu");
+        }
+        "quit" => {
+            log::info!("Quit requested from tray menu");
+            app.exit(0);
+        }
+        _ => {}
+    }
+}
+
+/// Show and focus the main window.
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// Open the settings window, or focus it if already open.
+fn open_settings_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("settings") {
+        // Settings window already exists — focus it
+        let _ = window.show();
+        let _ = window.set_focus();
+    } else {
+        // Create settings window
+        match tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("/settings".into()))
+            .title("IBEX Settings")
+            .inner_size(640.0, 700.0)
+            .min_inner_size(500.0, 400.0)
+            .resizable(true)
+            .minimizable(true)
+            .build()
+        {
+            Ok(_) => {
+                log::info!("Settings window opened");
+            }
+            Err(e) => {
+                log::error!("Failed to open settings window: {e}");
+            }
+        }
+    }
 }
 
 /// Update the tray menu and tooltip based on current state.
@@ -53,9 +110,9 @@ pub fn update_tray_menu(app: &AppHandle, tray: &TrayIcon) -> Result<(), String> 
     // Update title (shown next to icon in macOS menu bar)
     let title = match health {
         AppHealth::Healthy => "IBEX",
-        AppHealth::Degraded => "IBEX ⚠",
-        AppHealth::Error => "IBEX ✗",
-        AppHealth::Starting => "IBEX …",
+        AppHealth::Degraded => "IBEX \u{26a0}",
+        AppHealth::Error => "IBEX \u{2717}",
+        AppHealth::Starting => "IBEX \u{2026}",
     };
     tray.set_title(Some(title))
         .map_err(|e| format!("Failed to set title: {e}"))?;
@@ -70,8 +127,8 @@ pub fn update_tray_menu(app: &AppHandle, tray: &TrayIcon) -> Result<(), String> 
     let docker_label = format!(
         "Docker: {}",
         match docker_status {
-            crate::state::DockerStatus::Healthy => "Running ✓",
-            crate::state::DockerStatus::ContainerRunning => "Starting…",
+            crate::state::DockerStatus::Healthy => "Running \u{2713}",
+            crate::state::DockerStatus::ContainerRunning => "Starting\u{2026}",
             crate::state::DockerStatus::ContainerStopped => "Stopped",
             crate::state::DockerStatus::ContainerMissing => "Not created",
             crate::state::DockerStatus::NotRunning => "Not running",
@@ -98,11 +155,11 @@ pub fn update_tray_menu(app: &AppHandle, tray: &TrayIcon) -> Result<(), String> 
     } else {
         for (name, status) in &servers {
             let icon = if status.healthy {
-                "✓"
+                "\u{2713}"
             } else if status.running {
-                "…"
+                "\u{2026}"
             } else {
-                "✗"
+                "\u{2717}"
             };
             let label = format!("{icon} {name} (:{port})", name = name, port = status.port);
             builder = builder.item(
@@ -123,7 +180,7 @@ pub fn update_tray_menu(app: &AppHandle, tray: &TrayIcon) -> Result<(), String> 
             .map_err(|e| format!("Menu error: {e}"))?,
     );
     builder = builder.item(
-        &MenuItemBuilder::with_id("settings", "Settings…")
+        &MenuItemBuilder::with_id("settings", "Settings\u{2026}")
             .build(app)
             .map_err(|e| format!("Menu error: {e}"))?,
     );
