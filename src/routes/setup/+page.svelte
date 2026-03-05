@@ -2,103 +2,337 @@
 	import { goto } from '$app/navigation';
 	import { APP_STORE_FILE } from '$lib/app/constants';
 	import { WEBUI_BASE_URL } from '$lib/stores';
+	import { invoke } from '@tauri-apps/api/core';
+	import { listen } from '@tauri-apps/api/event';
 	import { getStore } from '@tauri-apps/plugin-store';
-	import type { i18n as i18nType } from 'i18next';
-	import { getContext, onMount } from 'svelte';
-	import type { Writable } from 'svelte/store';
+	import { onMount } from 'svelte';
 
-	const i18n: Writable<i18nType> = getContext('i18n');
+	type Step = 'welcome' | 'dependencies' | 'connectors' | 'launching' | 'done';
 
-	console.debug('On setup page');
+	let currentStep: Step = 'welcome';
+	let statusMessage = '';
+	let errorMessage = '';
+	let dockerOk = false;
+	let launchProgress = 0;
 
-	let baseUrl = '';
-	const onKeyDown = async (e: KeyboardEvent) => {
-		if (e.key === 'Enter') {
-			revealSplashScreen();
-			$WEBUI_BASE_URL = baseUrl;
+	// Connector config (minimal for first run)
+	let config: any = {};
+	let expandedConnectors: Record<string, boolean> = {};
+
+	const connectorDefs = [
+		{
+			key: 'slack', name: 'Slack',
+			fields: [{ key: 'slack_token', label: 'User OAuth Token', type: 'password', placeholder: 'xoxp-...' }]
+		},
+		{
+			key: 'notion', name: 'Notion',
+			fields: [{ key: 'notion_token', label: 'Integration Token', type: 'password', placeholder: 'ntn_...' }]
+		},
+		{
+			key: 'jira', name: 'Jira',
+			fields: [
+				{ key: 'jira_domain', label: 'Domain', type: 'text', placeholder: 'yourcompany.atlassian.net' },
+				{ key: 'jira_email', label: 'Email', type: 'email', placeholder: 'you@company.com' },
+				{ key: 'jira_api_token', label: 'API Token', type: 'password', placeholder: '' }
+			]
+		},
+		{
+			key: 'memory', name: 'Memory (GitHub)',
+			fields: [
+				{ key: 'github_token', label: 'GitHub PAT', type: 'password', placeholder: 'ghp_...' },
+				{ key: 'github_owner', label: 'Org/Username', type: 'text', placeholder: 'Percona-Lab' },
+				{ key: 'github_repo', label: 'Repository', type: 'text', placeholder: 'ai-memory-yourname' }
+			]
 		}
-	};
+	];
 
-	$: if ($WEBUI_BASE_URL) {
+	function hasAnyConnector(): boolean {
+		return connectorDefs.some(def =>
+			def.fields.some(f => config[f.key] && config[f.key].trim() !== '')
+		);
+	}
+
+	async function checkDocker() {
+		try {
+			const status = await invoke('get_docker_status');
+			dockerOk = status === 'Healthy' || status === 'ContainerRunning' || status === 'ContainerStopped' || status === 'ContainerMissing';
+			return dockerOk;
+		} catch {
+			dockerOk = false;
+			return false;
+		}
+	}
+
+	async function saveConnectors() {
+		try {
+			await invoke('save_config', { newConfig: config });
+		} catch (e) {
+			console.error('Failed to save config:', e);
+		}
+	}
+
+	async function startLaunch() {
+		currentStep = 'launching';
+		launchProgress = 0;
+		errorMessage = '';
+
+		// Save connectors first
+		await saveConnectors();
+
+		// Listen for startup status events
+		const unlisten = await listen<string>('startup-status', (event) => {
+			statusMessage = event.payload;
+			launchProgress = Math.min(launchProgress + 15, 90);
+		});
+
+		const unlistenComplete = await listen<boolean>('startup-complete', () => {
+			launchProgress = 100;
+			statusMessage = 'Ready!';
+			setTimeout(() => {
+				currentStep = 'done';
+			}, 500);
+		});
+
+		const unlistenError = await listen<string>('startup-error', (event) => {
+			errorMessage = event.payload;
+			statusMessage = '';
+		});
+
+		// The startup sequence runs automatically in lib.rs setup()
+		// But if we got here, it may have already failed or not started yet
+		// Wait a moment, then check
+		setTimeout(async () => {
+			if (launchProgress === 0) {
+				statusMessage = 'Starting IBEX services...';
+				launchProgress = 5;
+			}
+		}, 1000);
+	}
+
+	async function goToChat() {
+		// Set the base URL so the app navigates to the main chat
+		const store = await getStore(APP_STORE_FILE);
+		await store?.set('webui_base_url', 'http://localhost:8080');
+		await store?.save();
+		$WEBUI_BASE_URL = 'http://localhost:8080';
 		goto('/', { replaceState: true });
 	}
 
-	let splashScreen: HTMLElement | null;
-	// Function to reveal the splash screen later
-	const revealSplashScreen = () => {
-		if (splashScreen) {
-			splashScreen.style.display = ''; // Reset display to original
-			splashScreen.dataset.visible = 'true'; // Update visibility state
-		}
-	};
-
-	$: $i18n.t('Sign in');
-
 	onMount(async () => {
-		console.debug('SETUP PAGE MOUNTED');
-		const store = await getStore(APP_STORE_FILE);
-		for (const key of (await store?.keys()) || []) {
-			if (key !== 'app_config' && key !== 'webui_base_url') {
-				await store?.delete(key);
-			}
+		// Load existing config if any
+		try {
+			config = await invoke('get_config');
+		} catch {
+			config = {};
 		}
-		await store?.save();
-		console.log(await store?.entries());
-		// Hide splash screen, since we haven't loaded yet we'll need to put it back later
-		splashScreen = document.getElementById('splash-screen');
-		if (splashScreen) {
-			splashScreen.style.display = 'none'; // Hide the element
-			splashScreen.dataset.visible = 'false'; // Store visibility state
+
+		// Hide splash screen
+		const splash = document.getElementById('splash-screen');
+		if (splash) {
+			splash.style.display = 'none';
 		}
 	});
 </script>
 
-<div class="w-full h-screen max-h-[100dvh] relative bg-white dark:bg-gray-900">
-	<!-- <div class="w-full h-full absolute top-0 left-0 bg-white dark:bg-black z-[-1]"></div> -->
-
+<div class="w-full h-screen max-h-[100dvh] bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
 	<div class="w-full h-full flex items-center justify-center">
-		<div class="w-full sm:max-w-md px-10 min-h-screen flex flex-col text-center">
-			<div class="my-auto pb-10 w-full dark:text-gray-100">
-				<h1 class="text-3xl font-bold mb-8 text-gray-900 dark:text-white">
-					Welcome to IBEX
-				</h1>
+		<div class="w-full max-w-lg px-8">
 
-				<form
-					class="flex flex-col justify-center space-y-4"
-					on:submit|preventDefault={() => {
-						revealSplashScreen();
-						$WEBUI_BASE_URL = baseUrl;
-					}}
-				>
-					<div class="text-center text-gray-600 dark:text-gray-400 mb-4">
-						Please enter the base URL of your IBEX instance to get started
-					</div>
-
-					<div class="space-y-1">
-						<div class=" text-sm font-medium text-left mb-1">
-							WebUI Base URL
-							<!-- {$i18n.t('WebUI Base URL')} -->
-						</div>
-						<input
-							bind:value={baseUrl}
-							autocorrect="off"
-							autocomplete="url"
-							spellcheck="false"
-							on:keydown={onKeyDown}
-							placeholder="http://localhost:3000"
-							class="my-0.5 w-full text-sm outline-none bg-transparent"
-						/>
-					</div>
-
+			<!-- Step: Welcome -->
+			{#if currentStep === 'welcome'}
+				<div class="text-center space-y-6 animate-in">
+					<div class="text-6xl mb-2">🦌</div>
+					<h1 class="text-3xl font-bold">Welcome to IBEX</h1>
+					<p class="text-gray-500 dark:text-gray-400">
+						Your workplace AI assistant. IBEX connects to your team's tools —
+						Slack, Jira, Notion, and more — so you can ask questions about your work.
+					</p>
 					<button
-						class="bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-medium text-sm py-2.5"
-						type="submit"
+						on:click={() => { checkDocker(); currentStep = 'dependencies'; }}
+						class="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-full transition-colors"
 					>
-						<!-- {$i18n.t('Get Started')} -->
 						Get Started
 					</button>
-				</form>
-			</div>
+				</div>
+			{/if}
+
+			<!-- Step: Dependencies -->
+			{#if currentStep === 'dependencies'}
+				<div class="space-y-6 animate-in">
+					<h2 class="text-2xl font-bold text-center">Prerequisites</h2>
+					<p class="text-gray-500 dark:text-gray-400 text-center">
+						IBEX needs Docker Desktop to run the AI backend.
+					</p>
+
+					<div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-3">
+						<div class="flex items-center justify-between">
+							<span class="font-medium">Docker Desktop</span>
+							{#if dockerOk}
+								<span class="text-green-500 font-medium">Installed ✓</span>
+							{:else}
+								<a href="https://docker.com/products/docker-desktop" target="_blank" rel="noopener"
+									class="text-blue-500 hover:underline text-sm">
+									Download →
+								</a>
+							{/if}
+						</div>
+					</div>
+
+					{#if !dockerOk}
+						<p class="text-sm text-gray-400 text-center">
+							Install and start Docker Desktop, then click Check Again.
+						</p>
+					{/if}
+
+					<div class="flex justify-between pt-4">
+						<button
+							on:click={() => currentStep = 'welcome'}
+							class="px-6 py-2.5 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+						>
+							Back
+						</button>
+						<div class="flex gap-3">
+							{#if !dockerOk}
+								<button
+									on:click={checkDocker}
+									class="px-6 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+								>
+									Check Again
+								</button>
+							{/if}
+							<button
+								on:click={() => currentStep = 'connectors'}
+								disabled={!dockerOk}
+								class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium rounded-lg transition-colors"
+							>
+								Next
+							</button>
+						</div>
+					</div>
+				</div>
+			{/if}
+
+			<!-- Step: Connectors -->
+			{#if currentStep === 'connectors'}
+				<div class="space-y-4 animate-in">
+					<h2 class="text-2xl font-bold text-center">Connect Your Tools</h2>
+					<p class="text-gray-500 dark:text-gray-400 text-center text-sm">
+						Add credentials for the tools you want IBEX to access.
+						You can add more later in Settings.
+					</p>
+
+					{#each connectorDefs as def}
+						<div class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+							<button
+								class="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+								on:click={() => expandedConnectors[def.key] = !expandedConnectors[def.key]}
+							>
+								<span class="font-medium">{def.name}</span>
+								<svg
+									class="w-4 h-4 text-gray-400 transition-transform {expandedConnectors[def.key] ? 'rotate-180' : ''}"
+									fill="none" viewBox="0 0 24 24" stroke="currentColor"
+								>
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+								</svg>
+							</button>
+
+							{#if expandedConnectors[def.key]}
+								<div class="px-4 pb-4 space-y-3 border-t border-gray-100 dark:border-gray-700">
+									{#each def.fields as field}
+										<div class="space-y-1 mt-2">
+											<label for={field.key} class="text-sm text-gray-600 dark:text-gray-300">
+												{field.label}
+											</label>
+											<input
+												id={field.key}
+												type={field.type}
+												bind:value={config[field.key]}
+												placeholder={field.placeholder}
+												class="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+											/>
+										</div>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					{/each}
+
+					<div class="flex justify-between pt-4">
+						<button
+							on:click={() => currentStep = 'dependencies'}
+							class="px-6 py-2.5 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+						>
+							Back
+						</button>
+						<button
+							on:click={startLaunch}
+							class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+						>
+							{hasAnyConnector() ? 'Launch IBEX' : 'Skip & Launch'}
+						</button>
+					</div>
+				</div>
+			{/if}
+
+			<!-- Step: Launching -->
+			{#if currentStep === 'launching'}
+				<div class="text-center space-y-6 animate-in">
+					<div class="text-5xl animate-pulse">🚀</div>
+					<h2 class="text-2xl font-bold">Setting Up IBEX</h2>
+
+					{#if errorMessage}
+						<div class="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded-lg p-4 text-sm">
+							{errorMessage}
+						</div>
+						<button
+							on:click={() => currentStep = 'dependencies'}
+							class="px-6 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+						>
+							Back
+						</button>
+					{:else}
+						<p class="text-gray-500 dark:text-gray-400">{statusMessage || 'Initializing...'}</p>
+
+						<!-- Progress bar -->
+						<div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+							<div
+								class="bg-blue-600 h-full rounded-full transition-all duration-500"
+								style="width: {launchProgress}%"
+							></div>
+						</div>
+					{/if}
+				</div>
+			{/if}
+
+			<!-- Step: Done -->
+			{#if currentStep === 'done'}
+				<div class="text-center space-y-6 animate-in">
+					<div class="text-5xl">✅</div>
+					<h2 class="text-2xl font-bold">You're All Set!</h2>
+					<p class="text-gray-500 dark:text-gray-400">
+						IBEX is running and connected to your tools.
+						Start asking questions about your work!
+					</p>
+					<button
+						on:click={goToChat}
+						class="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-full transition-colors"
+					>
+						Start Chatting
+					</button>
+				</div>
+			{/if}
+
 		</div>
 	</div>
 </div>
+
+<style>
+	.animate-in {
+		animation: fadeIn 0.3s ease-out;
+	}
+
+	@keyframes fadeIn {
+		from { opacity: 0; transform: translateY(10px); }
+		to { opacity: 1; transform: translateY(0); }
+	}
+</style>
