@@ -206,6 +206,12 @@ pub async fn create_container(config: &IbexConfig) -> Result<String, String> {
     // push_system_prompt.
     env.push("WEBUI_SECRET_KEY=ibex-desktop-local-secret-key".to_string());
 
+    // Default model fallback — Open WebUI uses this if no model is set via API.
+    // Belt-and-suspenders: the Rust code also discovers and sets the model via
+    // push_system_prompt(), but this env var ensures a sensible default even if
+    // the API-based model selection fails (e.g. LLM backends unreachable).
+    env.push("DEFAULT_MODELS=qwen3.5:35b".to_string());
+
     // Preconfigure LLM backends for Percona internal servers
     // LM Studio (OpenAI-compatible API)
     env.push(

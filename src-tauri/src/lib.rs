@@ -13,6 +13,7 @@ use state::AppState;
 use std::sync::Arc;
 use tauri::tray::TrayIcon;
 use tauri::{Emitter, Listener, Manager, RunEvent, WindowEvent};
+use tauri_plugin_store::StoreExt;
 
 // ── Tauri Commands (callable from Svelte frontend) ──
 
@@ -29,9 +30,16 @@ fn save_config(
     state: tauri::State<'_, AppState>,
     new_config: config::IbexConfig,
 ) -> Result<(), String> {
+    let connectors = new_config.configured_connectors();
+    log::info!(
+        "save_config: saving {} connectors {:?}",
+        connectors.len(),
+        connectors
+    );
     new_config.save()?;
     let mut cfg = state.config.lock().map_err(|e| e.to_string())?;
     *cfg = new_config;
+    log::info!("save_config: config saved to disk + in-memory state updated");
     Ok(())
 }
 
@@ -92,7 +100,15 @@ fn get_startup_status(
 #[tauri::command]
 fn needs_setup(state: tauri::State<'_, AppState>) -> bool {
     let config = state.config.lock().unwrap();
-    config.configured_connectors().is_empty()
+    let connectors = config.configured_connectors();
+    let result = connectors.is_empty();
+    log::info!(
+        "needs_setup: {} connectors configured {:?} → returning {}",
+        connectors.len(),
+        connectors,
+        result
+    );
+    result
 }
 
 /// Check network connectivity by trying to reach well-known endpoints.
@@ -205,8 +221,20 @@ async fn restart_servers(
         }
     }
 
-    // Brief pause to let MCP servers bind to ports
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // Wait for MCP servers to become healthy before Docker recreation.
+    // Open WebUI verifies connections — servers must be listening first.
+    for attempt in 1..=10u32 {
+        let health = process::health_check_all(&config).await;
+        let healthy_count = health.values().filter(|&&v| v).count();
+        let total = health.len();
+        log::info!("MCP health check {attempt}/10: {healthy_count}/{total} healthy");
+        if healthy_count == total {
+            break;
+        }
+        if attempt < 10 {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        }
+    }
 
     // 3. Recreate Docker container with updated TOOL_SERVER_CONNECTIONS
     if let Err(e) = docker::ensure_running(&config).await {
@@ -291,6 +319,32 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
 
+            // Clear stale frontend store data before the webview loads.
+            //
+            // The Svelte frontend uses crossWindowWritable stores (backed by this
+            // Tauri store file) to persist tools, models, config, and settings.
+            // These become stale after container recreation, model changes, or
+            // config updates. If the webview JavaScript loads stale data before
+            // the API fetches complete, the UI shows wrong tools/models.
+            //
+            // By clearing these keys here (in setup, before the event loop starts),
+            // the crossWindowWritable stores initialize to their defaults (null/[]),
+            // and the fresh API data from (app)/+layout.svelte is authoritative.
+            match app.store("stores.json") {
+                Ok(store) => {
+                    for key in &["tools", "models", "config", "settings"] {
+                        store.delete(key);
+                    }
+                    if let Err(e) = store.save() {
+                        log::warn!("Failed to save store after clearing stale keys: {e}");
+                    }
+                    log::info!("Cleared stale frontend store keys (tools, models, config, settings)");
+                }
+                Err(e) => {
+                    log::warn!("Failed to open store for clearing: {e}");
+                }
+            }
+
             // Setup system tray
             let tray: Option<Arc<TrayIcon>> = match tray::setup_tray(&handle) {
                 Ok(t) => {
@@ -360,8 +414,17 @@ pub fn run() {
                             }
                         }
 
-                        // Brief pause for servers to bind
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        // Wait for MCP servers to become healthy
+                        for attempt in 1..=10u32 {
+                            let health = process::health_check_all(&config).await;
+                            let healthy_count = health.values().filter(|&&v| v).count();
+                            let total = health.len();
+                            log::info!("Tray restart: MCP health {attempt}/10: {healthy_count}/{total}");
+                            if healthy_count == total { break; }
+                            if attempt < 10 {
+                                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                            }
+                        }
 
                         // 3. Recreate Docker container
                         let _ = docker::ensure_running(&config).await;
@@ -499,7 +562,71 @@ async fn startup_sequence(app: &tauri::AppHandle) -> Result<(), String> {
     let jwt_opt = account::ensure_authenticated(&base_url).await?;
     *state.jwt_token.lock().unwrap() = jwt_opt.clone();
 
-    // 6. Push tool connections + system prompt (only if we have an auth token)
+    // 6. Start MCP servers BEFORE pushing tool connections.
+    //    Open WebUI verifies each MCP connection by reaching out to its /mcp
+    //    endpoint. If servers aren't listening yet, verification fails and the
+    //    tools won't appear as toggles in the chat UI.
+    app.emit("startup-status", "Starting MCP servers...").ok();
+
+    // Pre-flight: check for port conflicts on MCP server ports
+    for server_def in process::SERVERS {
+        if process::should_start(server_def.name, &config) {
+            if let Err(msg) = process::check_port_available(server_def.port) {
+                log::warn!("Port conflict: {msg}");
+                app.emit("startup-warning", &msg).ok();
+            }
+        }
+    }
+
+    // Resolve Node.js binary and server scripts directory.
+    // In production: use Tauri-bundled sidecar + resources.
+    // In development: use system node and the original ~/IBEX repo.
+    let node_bin = resolve_node_binary();
+    let servers_dir = resolve_servers_dir();
+
+    if let (Some(node_bin), Some(servers_dir)) = (node_bin, servers_dir) {
+        log::info!("Node.js: {}", node_bin.display());
+        log::info!("Servers dir: {}", servers_dir.display());
+
+        let new_processes = process::start_all(&node_bin, &servers_dir, &config);
+        let started: Vec<String> = new_processes.keys().cloned().collect();
+        log::info!("Started MCP servers: {:?}", started);
+
+        // Store child process handles for lifecycle management
+        let mut procs = state.server_processes.lock().unwrap();
+        for (name, child) in new_processes {
+            procs.insert(name, child);
+        }
+    } else {
+        log::warn!(
+            "Node.js binary or server scripts not found — MCP servers will not start. \
+             Ensure Node.js is installed and IBEX server scripts are available."
+        );
+    }
+
+    // 7. Wait for MCP servers to become healthy before pushing connections.
+    //    Without this, Open WebUI's verification finds servers unreachable.
+    if !connectors.is_empty() {
+        app.emit("startup-status", "Waiting for MCP servers...")
+            .ok();
+        for attempt in 1..=10u32 {
+            let health = process::health_check_all(&config).await;
+            let healthy_count = health.values().filter(|&&v| v).count();
+            let total = health.len();
+            let all_healthy = healthy_count == total;
+            log::info!(
+                "MCP health check {attempt}/10: {healthy_count}/{total} healthy"
+            );
+            if all_healthy {
+                break;
+            }
+            if attempt < 10 {
+                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            }
+        }
+    }
+
+    // 8. Push tool connections + system prompt (only if we have an auth token)
     if let Some(ref jwt) = jwt_opt {
         app.emit("startup-status", "Configuring AI assistant...")
             .ok();
@@ -572,46 +699,7 @@ async fn startup_sequence(app: &tauri::AppHandle) -> Result<(), String> {
         log::info!("Skipping system prompt push — no admin auth. User will log in manually.");
     }
 
-    // 7. Start MCP servers
-    app.emit("startup-status", "Starting MCP servers...").ok();
-
-    // Pre-flight: check for port conflicts on MCP server ports
-    for server_def in process::SERVERS {
-        if process::should_start(server_def.name, &config) {
-            if let Err(msg) = process::check_port_available(server_def.port) {
-                log::warn!("Port conflict: {msg}");
-                app.emit("startup-warning", &msg).ok();
-            }
-        }
-    }
-
-    // Resolve Node.js binary and server scripts directory.
-    // In production: use Tauri-bundled sidecar + resources.
-    // In development: use system node and the original ~/IBEX repo.
-    let node_bin = resolve_node_binary();
-    let servers_dir = resolve_servers_dir();
-
-    if let (Some(node_bin), Some(servers_dir)) = (node_bin, servers_dir) {
-        log::info!("Node.js: {}", node_bin.display());
-        log::info!("Servers dir: {}", servers_dir.display());
-
-        let new_processes = process::start_all(&node_bin, &servers_dir, &config);
-        let started: Vec<String> = new_processes.keys().cloned().collect();
-        log::info!("Started MCP servers: {:?}", started);
-
-        // Store child process handles for lifecycle management
-        let mut procs = state.server_processes.lock().unwrap();
-        for (name, child) in new_processes {
-            procs.insert(name, child);
-        }
-    } else {
-        log::warn!(
-            "Node.js binary or server scripts not found — MCP servers will not start. \
-             Ensure Node.js is installed and IBEX server scripts are available."
-        );
-    }
-
-    // 8. Update health
+    // 9. Update health
     *state.app_health.lock().unwrap() = state::AppHealth::Healthy;
 
     app.emit("startup-status", "Ready!").ok();

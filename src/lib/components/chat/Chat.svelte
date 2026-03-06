@@ -154,8 +154,58 @@
 		console.log('saveSessionSelectedModels', selectedModels, sessionStorage.selectedModels);
 	};
 
-	$: if (selectedModels) {
+	// Track both selectedModels AND $tools as dependencies.
+	// Without $tools, this only re-runs when selectedModels changes.
+	// When (app)/+layout.svelte fetches fresh tools from the API (e.g., 6 items
+	// replacing a stale 3-item list from crossWindowWritable persistence),
+	// we need setToolIds() to re-run to pick up all available tools.
+	$: if (selectedModels || $tools) {
 		setToolIds();
+	}
+
+	// Fix model selection after fresh API data arrives.
+	//
+	// Svelte mounts children before parents, so Chat.svelte's onMount
+	// (which calls initNewChat) fires BEFORE (app)/+layout.svelte fetches
+	// models/config from the API. initNewChat sees empty $models/$config
+	// (crossWindowWritable defaults) and sets selectedModels = [''].
+	//
+	// This reactive block catches the moment fresh models arrive and
+	// picks the correct default model. It only runs for new chats
+	// (not existing ones) and only when the current selection is
+	// empty/invalid — it won't override intentional user selections.
+	$: if (
+		!chatIdProp &&
+		$models.length > 0 &&
+		(selectedModels.length === 0 ||
+			selectedModels[0] === '' ||
+			!$models.find((m) => m.id === selectedModels[0]))
+	) {
+		// Current model is empty or not in the available models list.
+		// Re-run the same selection logic as initNewChat.
+		if ($settings?.models) {
+			const validSettings = ($settings.models as string[]).filter((id: string) =>
+				$models.find((m) => m.id === id)
+			);
+			if (validSettings.length > 0) {
+				selectedModels = validSettings;
+			}
+		}
+		// If settings didn't help, try config default
+		if (selectedModels.length === 0 || selectedModels[0] === '' || !$models.find((m) => m.id === selectedModels[0])) {
+			if ($config?.default_models) {
+				const defaults = ($config.default_models as string)
+					.split(',')
+					.filter((id: string) => $models.find((m) => m.id === id));
+				if (defaults.length > 0) {
+					selectedModels = defaults;
+				}
+			}
+		}
+		// Final fallback: first available model
+		if (selectedModels.length === 0 || selectedModels[0] === '' || !$models.find((m) => m.id === selectedModels[0])) {
+			selectedModels = [$models[0].id];
+		}
 	}
 
 	const setToolIds = async () => {

@@ -48,6 +48,46 @@
 	$: console.log('Loaded changed', loaded);
 	$: console.log('WEBUI_BASE_URL changed', $WEBUI_BASE_URL);
 
+	/**
+	 * Show a branded splash overlay before page reloads.
+	 * Creates a fixed overlay matching the splash screen in app.html so the
+	 * user sees a consistent loading experience instead of a blank flash.
+	 */
+	const showSplashOverlay = () => {
+		// If the original splash-screen still exists, just show it
+		const existing = document.getElementById('splash-screen');
+		if (existing) {
+			existing.style.display = 'flex';
+			return;
+		}
+		// Otherwise, create a temporary overlay that matches the splash screen
+		const isDark = document.documentElement.classList.contains('dark') ||
+			(!document.documentElement.classList.contains('light') &&
+				window.matchMedia('(prefers-color-scheme: dark)').matches);
+		const overlay = document.createElement('div');
+		overlay.id = 'splash-overlay';
+		overlay.style.cssText = `
+			position: fixed; z-index: 9999; top: 0; left: 0; width: 100%; height: 100%;
+			display: flex; flex-direction: column; align-items: center; justify-content: center;
+			background: ${isDark ? '#111' : '#fff'};
+		`;
+		overlay.innerHTML = `
+			<img style="width:auto;height:5rem;${isDark ? 'filter:invert(1);' : ''}" src="/static/splash.png" />
+			<div style="margin-top:1rem;font-size:1.5rem;font-weight:700;letter-spacing:0.15em;
+				color:${isDark ? '#f0f0f0' : '#171717'};
+				font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">IBEX</div>
+			<div style="margin-top:0.35rem;font-size:0.8rem;font-weight:400;letter-spacing:0.05em;
+				color:#888;
+				font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+				Integration Bridge for EXtended systems</div>
+			<div style="margin-top:2rem;width:1.5rem;height:1.5rem;
+				border:2px solid ${isDark ? '#333' : '#e5e7eb'};
+				border-top-color:#3b82f6;border-radius:50%;
+				animation:splash-spin 0.8s linear infinite;"></div>
+		`;
+		document.body.appendChild(overlay);
+	};
+
 	const setupSocket = () => {
 		const _socket = io(`${$WEBUI_BASE_URL}` || undefined, {
 			reconnection: true,
@@ -107,6 +147,7 @@
 		let unlistenReopen: UnlistenFn;
 		let unlistenOpenInMainWindow: UnlistenFn;
 		let unlistenStartupComplete: UnlistenFn;
+		let unlistenServersRestarted: UnlistenFn;
 		(async () => {
 			console.log('Waiting 100ms for cross window stores to load...');
 			await delay(100);
@@ -157,6 +198,38 @@
 				}
 			});
 
+			// IBEX: Listen for server restarts (settings save, tray menu).
+			// restart_servers() may recreate the Docker container, push updated
+			// tool connections, and re-authenticate — all of which change
+			// server-side state. The simplest way to pick up ALL changes
+			// (tools, models, config) is to inject the fresh JWT and reload.
+			unlistenServersRestarted = await listen('servers-restarted', async () => {
+				// Don't reload when the setup wizard or settings page is active.
+				// These pages manage their own flow (e.g., the setup wizard calls
+				// restart_servers and then navigates to goToChat itself). Reloading
+				// here would interrupt that flow and loop back to /setup.
+				if (page.url.pathname === '/setup' || page.url.pathname === '/settings') {
+					console.log('IBEX: servers-restarted on', page.url.pathname, '— skipping reload');
+					return;
+				}
+
+				console.log('IBEX: servers-restarted — refreshing page with updated config');
+				try {
+					const jwt: string | null = await invoke('get_jwt_token');
+					if (jwt) {
+						localStorage.setItem('token', jwt);
+					}
+				} catch (e) {
+					console.warn('IBEX: Failed to get JWT after restart:', e);
+				}
+				// Show the branded splash screen BEFORE reloading so the user sees
+				// a consistent loading experience instead of a blank/flashing screen.
+				showSplashOverlay();
+				// Brief delay for container + MCP servers to stabilize
+				await delay(1000);
+				window.location.reload();
+			});
+
 			//
 			unlistenOpenInMainWindow = await listen(
 				OPEN_IN_MAIN_WINDOW,
@@ -179,21 +252,23 @@
 
 			window.addEventListener('resize', onResize);
 
-			// Route to setup page if no WEBUI_BASE_URL or if backend has no connectors configured.
-			// The needs_setup check catches the case where stores.json has a stale webui_base_url
-			// from a previous install but the user has reset their config (fresh ~/.ibex-mcp.env).
+			// Check if the setup wizard should be shown.
+			//
+			// The backend's needs_setup command is authoritative — it checks if
+			// any connectors are configured in ~/.ibex-mcp.env + Keychain.
+			// WEBUI_BASE_URL (from Tauri stores.json) is a secondary signal:
+			// it may be empty after reinstall or store reset even when connectors
+			// are fully configured.
 			console.log('WEBUI_BASE_URL before setup check:', $WEBUI_BASE_URL);
-			let setupRequired = $WEBUI_BASE_URL === '';
-			if (!setupRequired) {
-				try {
-					setupRequired = await invoke('needs_setup');
-					if (setupRequired) {
-						console.log('Backend reports no connectors configured — forcing setup');
-					}
-				} catch (e) {
-					console.warn('needs_setup check failed:', e);
-				}
+			let setupRequired = false;
+			try {
+				setupRequired = await invoke('needs_setup');
+				console.log('needs_setup returned:', setupRequired);
+			} catch (e) {
+				console.warn('needs_setup check failed, falling back to WEBUI_BASE_URL:', e);
+				setupRequired = $WEBUI_BASE_URL === '';
 			}
+
 			if (setupRequired) {
 				console.log('Setup required', page.url.pathname);
 				if (page.url.pathname !== '/setup') {
@@ -207,6 +282,15 @@
 				document.getElementById('splash-screen')?.remove();
 				loaded = true;
 				return;
+			}
+
+			// If WEBUI_BASE_URL is empty but setup is NOT required (connectors
+			// exist), set it to the default. This handles reinstall or store
+			// reset where stores.json lost the value.
+			if ($WEBUI_BASE_URL === '') {
+				console.log('WEBUI_BASE_URL empty but setup not required — setting default');
+				WEBUI_BASE_URL.set('http://localhost:8080');
+				await delay(50);
 			}
 
 			let backendConfig = null;
@@ -332,6 +416,9 @@
 
 			// Unlisten to startup complete event
 			if (unlistenStartupComplete) unlistenStartupComplete();
+
+			// Unlisten to servers restarted event
+			if (unlistenServersRestarted) unlistenServersRestarted();
 		};
 	});
 </script>
