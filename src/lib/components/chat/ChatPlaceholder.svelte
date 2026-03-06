@@ -51,10 +51,7 @@
 						>
 							<img
 								crossorigin="anonymous"
-								src={model?.info?.meta?.profile_image_url ??
-									($i18n.language === 'dg-DG'
-										? `/doge.png`
-										: `${$WEBUI_BASE_URL}/static/favicon.png`)}
+								src="/ibex-icon.png"
 								class=" size-[2.7rem] rounded-full border-[1px] border-gray-200 dark:border-none"
 								alt="logo"
 								draggable="false"
@@ -82,11 +79,7 @@
 		>
 			<div>
 				<div class=" capitalize line-clamp-1" in:fade={{ duration: 200 }}>
-					{#if models[selectedModelIdx]?.name}
-						{models[selectedModelIdx]?.name}
-					{:else}
-						{$i18n.t('Hello, {{name}}', { name: $user.name })}
-					{/if}
+					Welcome to IBEX
 				</div>
 
 				<div in:fade={{ duration: 200, delay: 200 }}>

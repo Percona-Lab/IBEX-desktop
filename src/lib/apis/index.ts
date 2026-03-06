@@ -1,5 +1,5 @@
 import { get } from 'svelte/store';
-import { WEBUI_BASE_URL } from '$lib/stores';
+import { WEBUI_BASE_URL, OLLAMA_API_BASE_URL } from '$lib/stores';
 
 export const getModels = async (token: string = '', base: boolean = false) => {
 	let error = null;
@@ -25,8 +25,90 @@ export const getModels = async (token: string = '', base: boolean = false) => {
 		throw error;
 	}
 
-	const models = res?.data ?? [];
-	return models;
+	const allModels = res?.data ?? [];
+
+	// IBEX: Filter to only models that support tool/function calling.
+	// 1. Check Ollama models via /api/show (has capabilities field)
+	// 2. For OpenAI-compatible models, match against Ollama model families
+	//    to determine tool support (e.g. deepseek-r1 → no tools)
+	try {
+		// Collect unique Ollama model names to check
+		const ollamaModels = allModels.filter((m: any) => m.owned_by === 'ollama');
+		const ollamaNames = [
+			...new Set(ollamaModels.map((m: any) => m.ollama?.model ?? m.id))
+		];
+
+		if (ollamaNames.length > 0) {
+			const baseUrl = get(OLLAMA_API_BASE_URL);
+			const headers = {
+				Accept: 'application/json',
+				'Content-Type': 'application/json',
+				...(token && { authorization: `Bearer ${token}` })
+			};
+
+			// Check capabilities for all Ollama models in parallel
+			const results = await Promise.all(
+				ollamaNames.map((name) =>
+					fetch(`${baseUrl}/api/show`, {
+						method: 'POST',
+						headers,
+						body: JSON.stringify({ model: name })
+					})
+						.then((r) => (r.ok ? r.json() : null))
+						.then((data) => ({ name, capabilities: data?.capabilities ?? [] }))
+						.catch(() => ({ name, capabilities: [] }))
+				)
+			);
+
+			// Build sets of tool-capable and non-tool model families.
+			// Family = the name before the colon/tag (e.g. "qwen3" from "qwen3:8b")
+			const toolFamilies = new Set<string>();
+			const noToolFamilies = new Set<string>();
+			const toolCapableOllama = new Set<string>();
+
+			for (const { name, capabilities } of results) {
+				const family = name.split(':')[0].toLowerCase();
+				if (Array.isArray(capabilities) && capabilities.includes('tools')) {
+					toolCapableOllama.add(name);
+					toolFamilies.add(family);
+				} else {
+					noToolFamilies.add(family);
+				}
+			}
+
+			const filtered = allModels.filter((m: any) => {
+				if (m.owned_by === 'ollama') {
+					// Direct check for Ollama models
+					const ollamaId = m.ollama?.model ?? m.id;
+					return toolCapableOllama.has(ollamaId);
+				}
+				// For OpenAI-compatible models: check if the model name matches
+				// a known non-tool Ollama family (e.g. "deepseek-r1")
+				const id = m.id.toLowerCase();
+				for (const family of noToolFamilies) {
+					if (id.includes(family)) {
+						return false; // Matches a non-tool model family
+					}
+				}
+				// Also exclude embedding models
+				if (id.includes('embed')) {
+					return false;
+				}
+				return true;
+			});
+
+			console.log(
+				`IBEX: Filtered models by tool capability: ${filtered.length}/${allModels.length}`,
+				`(tool families: ${[...toolFamilies].join(', ')};`,
+				`no-tool families: ${[...noToolFamilies].join(', ')})`
+			);
+			return filtered;
+		}
+	} catch (e) {
+		console.warn('IBEX: Could not check tool capabilities, showing all models:', e);
+	}
+
+	return allModels;
 };
 
 type ChatCompletedForm = {

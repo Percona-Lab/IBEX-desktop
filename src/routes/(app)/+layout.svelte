@@ -72,7 +72,12 @@
 			});
 
 			if (userSettings) {
-				settings.set(userSettings.ui);
+				// Merge top-level system prompt into ui settings so the Settings UI can display it
+				const merged = {
+					...(userSettings.ui ?? {}),
+					system: userSettings.ui?.system ?? userSettings.system ?? ''
+				};
+				settings.set(merged);
 			} else {
 				let localStorageSettings = {} as Parameters<(typeof settings)['set']>[0];
 

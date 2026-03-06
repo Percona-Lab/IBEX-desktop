@@ -432,7 +432,7 @@
 				<div class="self-center mx-1.5">
 					<img
 						crossorigin="anonymous"
-						src="{$WEBUI_BASE_URL}/static/favicon.png"
+						src="/percona-icon.png"
 						class=" size-5 -translate-x-1.5 rounded-full"
 						alt="logo"
 					/>
@@ -786,9 +786,10 @@
 						>
 							<div class=" self-center mr-3">
 								<img
-									src={$user.profile_image_url}
+									src={$user.profile_image_url || '/ibex-icon.png'}
 									class=" max-w-[30px] object-cover rounded-full"
 									alt="User profile"
+									on:error={(e) => { e.target.src = '/ibex-icon.png'; }}
 								/>
 							</div>
 							<div class=" self-center font-medium">{$user.name}</div>

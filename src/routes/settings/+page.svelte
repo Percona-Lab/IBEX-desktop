@@ -16,7 +16,13 @@
 	// Collapsible sections
 	let expandedSections: Record<string, boolean> = {};
 
-	const connectorDefs = [
+	const connectorDefs: Array<{
+		key: string;
+		name: string;
+		fields: Array<{ key: string; label: string; type: string; placeholder: string; suffix?: string }>;
+		helpUrl: string;
+		helpText: string;
+	}> = [
 		{
 			key: 'slack',
 			name: 'Slack',
@@ -39,12 +45,35 @@
 			key: 'jira',
 			name: 'Jira',
 			fields: [
-				{ key: 'jira_domain', label: 'Domain', type: 'text', placeholder: 'yourcompany.atlassian.net' },
+				{ key: 'jira_subdomain', label: 'Subdomain', type: 'text', placeholder: 'yourcompany', suffix: '.atlassian.net' },
 				{ key: 'jira_email', label: 'Email', type: 'email', placeholder: 'you@company.com' },
 				{ key: 'jira_api_token', label: 'API Token', type: 'password', placeholder: '' }
 			],
 			helpUrl: 'https://id.atlassian.com/manage-profile/security/api-tokens',
 			helpText: 'Create API token from your Atlassian account security settings'
+		},
+		{
+			key: 'servicenow',
+			name: 'ServiceNow',
+			fields: [
+				{ key: 'servicenow_subdomain', label: 'Subdomain', type: 'text', placeholder: 'yourcompany', suffix: '.service-now.com' },
+				{ key: 'servicenow_username', label: 'Username', type: 'text', placeholder: '' },
+				{ key: 'servicenow_password', label: 'Password', type: 'password', placeholder: '' }
+			],
+			helpUrl: '',
+			helpText: 'Enter the part before .service-now.com'
+		},
+		{
+			key: 'salesforce',
+			name: 'Salesforce',
+			fields: [
+				{ key: 'salesforce_subdomain', label: 'Subdomain', type: 'text', placeholder: 'yourcompany', suffix: '.my.salesforce.com' },
+				{ key: 'salesforce_username', label: 'Username', type: 'email', placeholder: 'you@company.com' },
+				{ key: 'salesforce_password', label: 'Password', type: 'password', placeholder: '' },
+				{ key: 'salesforce_security_token', label: 'Security Token', type: 'password', placeholder: '' }
+			],
+			helpUrl: 'https://help.salesforce.com/s/articleView?id=sf.user_security_token.htm',
+			helpText: 'Settings → My Personal Information → Reset My Security Token'
 		},
 		{
 			key: 'memory',
@@ -56,27 +85,6 @@
 			],
 			helpUrl: 'https://github.com/settings/tokens?type=beta',
 			helpText: 'Create a private repo \u2192 Fine-grained PAT \u2192 Scope to your org \u2192 Select repo \u2192 Permissions: Contents \u2192 Read and write'
-		},
-		{
-			key: 'servicenow',
-			name: 'ServiceNow',
-			fields: [
-				{ key: 'servicenow_instance', label: 'Instance', type: 'text', placeholder: 'yourcompany.service-now.com' },
-				{ key: 'servicenow_username', label: 'Username', type: 'text', placeholder: '' },
-				{ key: 'servicenow_password', label: 'Password', type: 'password', placeholder: '' }
-			],
-			helpUrl: '',
-			helpText: 'Instance format: yourcompany.service-now.com'
-		},
-		{
-			key: 'salesforce',
-			name: 'Salesforce',
-			fields: [
-				{ key: 'salesforce_instance_url', label: 'Instance URL', type: 'text', placeholder: 'https://yourcompany.my.salesforce.com' },
-				{ key: 'salesforce_access_token', label: 'Access Token', type: 'password', placeholder: '' }
-			],
-			helpUrl: '',
-			helpText: 'Instance format: https://yourcompany.my.salesforce.com'
 		}
 	];
 
@@ -84,9 +92,37 @@
 		return def.fields.every(f => config[f.key] && config[f.key].trim() !== '');
 	}
 
+	function reverseMapSubdomains() {
+		if (config.jira_domain) {
+			config.jira_subdomain = config.jira_domain.replace(/\.atlassian\.net$/i, '');
+		}
+		if (config.servicenow_instance) {
+			config.servicenow_subdomain = config.servicenow_instance.replace(/\.service-now\.com$/i, '');
+		}
+		if (config.salesforce_instance_url) {
+			config.salesforce_subdomain = config.salesforce_instance_url.replace(/^https?:\/\//i, '').replace(/\.my\.salesforce\.com$/i, '');
+		}
+	}
+
+	function convertSubdomains() {
+		if (config.jira_subdomain) {
+			config.jira_domain = config.jira_subdomain.replace(/\.atlassian\.net$/i, '') + '.atlassian.net';
+			delete config.jira_subdomain;
+		}
+		if (config.servicenow_subdomain) {
+			config.servicenow_instance = config.servicenow_subdomain.replace(/\.service-now\.com$/i, '') + '.service-now.com';
+			delete config.servicenow_subdomain;
+		}
+		if (config.salesforce_subdomain) {
+			config.salesforce_instance_url = 'https://' + config.salesforce_subdomain.replace(/\.my\.salesforce\.com$/i, '') + '.my.salesforce.com';
+			delete config.salesforce_subdomain;
+		}
+	}
+
 	async function loadState() {
 		try {
 			config = await invoke('get_config');
+			reverseMapSubdomains();
 			health = await invoke('get_health');
 			connectors = await invoke('get_configured_connectors');
 			dockerStatus = await invoke('get_docker_status');
@@ -100,6 +136,7 @@
 		saving = true;
 		message = '';
 		try {
+			convertSubdomains();
 			await invoke('save_config', { newConfig: config });
 			message = 'Configuration saved! Click "Restart Servers" to apply changes.';
 			messageType = 'success';
@@ -133,6 +170,7 @@
 		restarting = true;
 		message = '';
 		try {
+			convertSubdomains();
 			await invoke('save_config', { newConfig: config });
 			await invoke('restart_servers');
 			message = 'Configuration saved and servers restarted!';
@@ -274,13 +312,46 @@
 								<label for={field.key} class="text-sm font-medium text-gray-600 dark:text-gray-300">
 									{field.label}
 								</label>
-								<input
-									id={field.key}
-									type={field.type}
-									bind:value={config[field.key]}
-									placeholder={field.placeholder}
-									class="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
-								/>
+								{#if field.type === 'password'}
+									<input
+										id={field.key}
+										type="password"
+										bind:value={config[field.key]}
+										placeholder={field.placeholder}
+										class="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+									/>
+								{:else if field.type === 'email'}
+									<input
+										id={field.key}
+										type="email"
+										bind:value={config[field.key]}
+										placeholder={field.placeholder}
+										class="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+									/>
+								{:else}
+									{#if field.suffix}
+										<div class="flex items-center">
+											<input
+												id={field.key}
+												type="text"
+												bind:value={config[field.key]}
+												placeholder={field.placeholder}
+												class="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-l-lg bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+											/>
+											<span class="px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 border border-l-0 border-gray-200 dark:border-gray-600 rounded-r-lg text-gray-500 dark:text-gray-400 whitespace-nowrap">
+												{field.suffix}
+											</span>
+										</div>
+									{:else}
+										<input
+											id={field.key}
+											type="text"
+											bind:value={config[field.key]}
+											placeholder={field.placeholder}
+											class="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+										/>
+									{/if}
+								{/if}
 							</div>
 						{/each}
 					</div>
@@ -308,7 +379,7 @@
 
 		<!-- Footer -->
 		<div class="text-xs text-gray-400 dark:text-gray-500 text-center pt-4 pb-8">
-			Configuration file: ~/.ibex-mcp.env
+			Credentials encrypted in macOS Keychain · Config: ~/.ibex-mcp.env
 		</div>
 	</div>
 </div>

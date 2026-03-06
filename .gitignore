@@ -308,3 +308,7 @@ cypress/videos
 cypress/screenshots
 .vscode/settings.json
 .aider*
+
+# Prototype build artifacts (populated by scripts/build-prototype.sh)
+src-tauri/binaries/
+src-tauri/resources/ibex-servers/

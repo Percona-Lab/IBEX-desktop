@@ -196,9 +196,27 @@ pub async fn create_container(config: &IbexConfig) -> Result<String, String> {
 
     let mut env = vec![format!("TOOL_SERVER_CONNECTIONS={mcp_json}")];
 
-    // Add LLM backend config if available (these can be set later via UI)
-    // For now, just set the MCP connections
-    env.push("WEBUI_AUTH=true".to_string());
+    // Disable auth — IBEX Desktop owns the container, no login needed
+    env.push("WEBUI_AUTH=false".to_string());
+
+    // Stable JWT secret so tokens survive container recreation.
+    // Without this, Open WebUI generates a random secret on each boot,
+    // invalidating all existing JWTs after restart_servers recreates the
+    // container — causing 401 errors on push_tool_connections and
+    // push_system_prompt.
+    env.push("WEBUI_SECRET_KEY=ibex-desktop-local-secret-key".to_string());
+
+    // Preconfigure LLM backends for Percona internal servers
+    // LM Studio (OpenAI-compatible API)
+    env.push(
+        "OPENAI_API_BASE_URLS=https://mac-studio-lm.int.percona.com/v1".to_string(),
+    );
+    env.push("OPENAI_API_KEYS=not-needed".to_string());
+
+    // Ollama backend
+    env.push(
+        "OLLAMA_BASE_URLS=https://mac-studio-ollama.int.percona.com".to_string(),
+    );
 
     let host_config = HostConfig {
         port_bindings: Some(port_bindings),
@@ -268,19 +286,48 @@ pub async fn remove_container() -> Result<(), String> {
 }
 
 /// Wait for Open WebUI to become healthy (up to timeout_secs).
+///
+/// If the backend refuses to start because WEBUI_AUTH=false conflicts with
+/// existing users in the DB, automatically resets the DB and restarts.
 pub async fn wait_for_healthy(timeout_secs: u64) -> Result<(), String> {
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(timeout_secs);
+    let mut auth_reset_attempted = false;
 
     while start.elapsed() < timeout {
         if check_webui_health().await {
             return Ok(());
         }
+
+        // Check if the container crashed due to auth migration conflict.
+        // Open WebUI exits when WEBUI_AUTH=false but existing users are in the DB.
+        if !auth_reset_attempted {
+            if let Ok(docker) = connect().await {
+                if let Ok(info) = docker.inspect_container(CONTAINER_NAME, None).await {
+                    let is_running = info
+                        .state
+                        .as_ref()
+                        .and_then(|s| s.running)
+                        .unwrap_or(true);
+
+                    if !is_running {
+                        log::warn!("Container stopped unexpectedly — attempting DB reset for auth migration");
+                        auth_reset_attempted = true;
+                        reset_webui_db();
+                        let _ = start_container().await;
+                        // Give it time to start fresh
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
+                }
+            }
+        }
+
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 
     Err(format!(
-        "Open WebUI not healthy after {timeout_secs}s"
+        "IBEX not healthy after {timeout_secs}s"
     ))
 }
 
@@ -299,7 +346,86 @@ async fn check_webui_health() -> bool {
         .unwrap_or(false)
 }
 
+/// Check if an existing container needs to be recreated (e.g., env vars changed).
+/// Returns (needs_recreation, was_auth_enabled) so callers know if DB reset is needed.
+///
+/// Compares: WEBUI_AUTH, LLM backends, and TOOL_SERVER_CONNECTIONS (MCP servers).
+/// The TOOL_SERVER_CONNECTIONS check ensures that when connectors are added/removed
+/// in Settings, the container is recreated so Open WebUI discovers the new MCP servers.
+async fn needs_recreation(config: &IbexConfig) -> (bool, bool) {
+    let docker = match connect().await {
+        Ok(d) => d,
+        Err(_) => return (false, false),
+    };
+
+    match docker.inspect_container(CONTAINER_NAME, None).await {
+        Ok(info) => {
+            let env_vars = info
+                .config
+                .and_then(|c| c.env)
+                .unwrap_or_default();
+
+            // Recreate if container still has old WEBUI_AUTH=true
+            let has_auth_false = env_vars.iter().any(|e| e == "WEBUI_AUTH=false");
+            if !has_auth_false {
+                log::info!("Container needs recreation: WEBUI_AUTH=false not set");
+                return (true, true); // was_auth_enabled = true → need DB reset
+            }
+
+            // Recreate if LLM backend env vars are missing
+            let has_ollama = env_vars
+                .iter()
+                .any(|e| e.starts_with("OLLAMA_BASE_URLS="));
+            let has_openai = env_vars
+                .iter()
+                .any(|e| e.starts_with("OPENAI_API_BASE_URLS="));
+            if !has_ollama || !has_openai {
+                log::info!("Container needs recreation: LLM backend env vars missing");
+                return (true, false); // no DB reset needed
+            }
+
+            // Recreate if TOOL_SERVER_CONNECTIONS changed (connectors added/removed)
+            let expected_mcp = build_mcp_connections(config);
+            let current_mcp = env_vars
+                .iter()
+                .find(|e| e.starts_with("TOOL_SERVER_CONNECTIONS="))
+                .map(|e| e.trim_start_matches("TOOL_SERVER_CONNECTIONS=").to_string())
+                .unwrap_or_default();
+            if current_mcp != expected_mcp {
+                log::info!(
+                    "Container needs recreation: TOOL_SERVER_CONNECTIONS changed \
+                     (current has {} servers, expected has {} servers)",
+                    current_mcp.matches("\"type\":\"mcp\"").count(),
+                    expected_mcp.matches("\"type\":\"mcp\"").count()
+                );
+                return (true, false);
+            }
+
+            (false, false)
+        }
+        Err(_) => (false, false),
+    }
+}
+
+/// Delete webui.db to allow switching from WEBUI_AUTH=true to WEBUI_AUTH=false.
+///
+/// Open WebUI refuses to disable auth when existing users are in the database.
+/// This is only called when upgrading from an auth-enabled container.
+fn reset_webui_db() {
+    let db_path = match dirs::home_dir() {
+        Some(home) => home.join("open-webui-data").join("webui.db"),
+        None => return,
+    };
+    if db_path.exists() {
+        match std::fs::remove_file(&db_path) {
+            Ok(()) => log::info!("Deleted {} for auth migration", db_path.display()),
+            Err(e) => log::warn!("Failed to delete {}: {e}", db_path.display()),
+        }
+    }
+}
+
 /// Ensure container is running. Creates if missing, starts if stopped.
+/// Recreates if env vars changed (e.g., auth disabled).
 pub async fn ensure_running(config: &IbexConfig) -> Result<DockerStatus, String> {
     let status = check_status().await;
 
@@ -318,12 +444,35 @@ pub async fn ensure_running(config: &IbexConfig) -> Result<DockerStatus, String>
             Ok(DockerStatus::ContainerRunning)
         }
         DockerStatus::ContainerStopped => {
-            log::info!("Container stopped, starting...");
-            start_container().await?;
+            let (recreate, was_auth) = needs_recreation(config).await;
+            if recreate {
+                log::info!("Recreating container with updated config...");
+                remove_container().await?;
+                if was_auth {
+                    reset_webui_db();
+                }
+                create_container(config).await?;
+                start_container().await?;
+            } else {
+                log::info!("Container stopped, starting...");
+                start_container().await?;
+            }
             Ok(DockerStatus::ContainerRunning)
         }
         DockerStatus::ContainerRunning | DockerStatus::Healthy => {
-            Ok(status)
+            let (recreate, was_auth) = needs_recreation(config).await;
+            if recreate {
+                log::info!("Recreating running container with updated config...");
+                remove_container().await?;
+                if was_auth {
+                    reset_webui_db();
+                }
+                create_container(config).await?;
+                start_container().await?;
+                Ok(DockerStatus::ContainerRunning)
+            } else {
+                Ok(status)
+            }
         }
     }
 }

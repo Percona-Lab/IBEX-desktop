@@ -25,6 +25,7 @@
 		WEBUI_NAME
 	} from '$lib/stores';
 	import { bestMatchingLanguage, delay } from '$lib/utils';
+	import { invoke } from '@tauri-apps/api/core';
 	import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { unregisterAll } from '@tauri-apps/plugin-global-shortcut';
@@ -105,6 +106,7 @@
 
 		let unlistenReopen: UnlistenFn;
 		let unlistenOpenInMainWindow: UnlistenFn;
+		let unlistenStartupComplete: UnlistenFn;
 		(async () => {
 			console.log('Waiting 100ms for cross window stores to load...');
 			await delay(100);
@@ -117,6 +119,42 @@
 			// Reopen main window event listener
 			unlistenReopen = await listen('reopen', async () => {
 				await reopenMainWindow();
+			});
+
+			// IBEX: Listen for backend startup completion.
+			// When the Tauri backend finishes auth, it injects the ibex-admin JWT
+			// into localStorage (after clearing any stale token). We ALWAYS
+			// re-authenticate here — the previous $user may have been from a
+			// stale token (e.g., the default "User" account created by /auth
+			// auto-signin in a previous session). The ibex-admin account has the
+			// system prompt, MCP tool config, and admin role.
+			unlistenStartupComplete = await listen('startup-complete', async () => {
+				console.log('IBEX startup complete — re-authenticating with ibex-admin JWT');
+				if (localStorage.token && $WEBUI_BASE_URL) {
+					// Disconnect old socket (may have been connected with stale/wrong token)
+					if ($socket) {
+						$socket.disconnect();
+					}
+					// Setup socket with fresh ibex-admin token
+					setupSocket();
+
+					// ALWAYS re-fetch session user with the ibex-admin JWT.
+					// Do NOT skip if $user is already set — it may be the wrong user.
+					const sessionUser = await getSessionUser(localStorage.token).catch((err) => {
+						console.error('IBEX: Failed to get session user:', err);
+						return null;
+					});
+					if (sessionUser) {
+						console.log('IBEX: Authenticated as', sessionUser.name, '(role:', sessionUser.role + ')');
+						$user = sessionUser;
+						$config = await getBackendConfig();
+
+						// Navigate to main page if on auth page
+						if (page.url.pathname === '/auth') {
+							await goto('/');
+						}
+					}
+				}
 			});
 
 			//
@@ -141,14 +179,33 @@
 
 			window.addEventListener('resize', onResize);
 
-			// Route to setup page if no WEBUI_BASE_URL
+			// Route to setup page if no WEBUI_BASE_URL or if backend has no connectors configured.
+			// The needs_setup check catches the case where stores.json has a stale webui_base_url
+			// from a previous install but the user has reset their config (fresh ~/.ibex-mcp.env).
 			console.log('WEBUI_BASE_URL before setup check:', $WEBUI_BASE_URL);
-			if ($WEBUI_BASE_URL === '') {
-				console.log('No WEBUI_BASE_URL', page.url.pathname);
+			let setupRequired = $WEBUI_BASE_URL === '';
+			if (!setupRequired) {
+				try {
+					setupRequired = await invoke('needs_setup');
+					if (setupRequired) {
+						console.log('Backend reports no connectors configured — forcing setup');
+					}
+				} catch (e) {
+					console.warn('needs_setup check failed:', e);
+				}
+			}
+			if (setupRequired) {
+				console.log('Setup required', page.url.pathname);
 				if (page.url.pathname !== '/setup') {
 					console.log('Redirecting to /setup');
 					await goto('/setup');
 				}
+				// Must set loaded=true so the <slot/> becomes visible.
+				// Without this, stale stores.json (webui_base_url already set)
+				// keeps the loading screen visible and the setup page never
+				// renders — the user gets stuck on an infinite spinner.
+				document.getElementById('splash-screen')?.remove();
+				loaded = true;
 				return;
 			}
 
@@ -169,7 +226,7 @@
 					? navigator.languages
 					: // @ts-expect-error Compatibility with older Internet Explorer browsers
 						[navigator.language || navigator.userLanguage];
-				const lang = backendConfig.default_locale
+				const lang = backendConfig?.default_locale
 					? backendConfig.default_locale
 					: bestMatchingLanguage(languages, browserLanguages, 'en-US');
 				$i18n.changeLanguage(lang);
@@ -180,11 +237,18 @@
 				$config = backendConfig;
 				$WEBUI_NAME = backendConfig.name;
 
-				if ($config) {
-					setupSocket();
+				// IBEX: Settings and Setup pages render independently of auth
+				const isIbexPage = page.url.pathname === '/settings' || page.url.pathname === '/setup';
 
+				if ($config && !isIbexPage) {
 					if (localStorage.token) {
 						console.log('Token:', localStorage.token);
+
+						// Setup socket only when we have a valid token.
+						// Previously setupSocket() ran before the token check, causing
+						// the socket to connect without auth → $socket.id undefined →
+						// chat API sends session_id: undefined → backend rejects.
+						setupSocket();
 
 						// Get Session User Info
 						const sessionUser = await getSessionUser(localStorage.token).catch((error) => {
@@ -197,19 +261,25 @@
 							$user = sessionUser;
 							$config = await getBackendConfig();
 						} else {
-							// Redirect Invalid Session User to /auth Page
+							// Token is invalid — remove it and wait for Tauri backend
+							// to inject a fresh JWT via the startup-complete event.
 							localStorage.removeItem('token');
-							await goto('/auth');
+							console.log('IBEX: Invalid session token removed — waiting for backend auth');
 						}
 					} else {
-						// Don't redirect if we're already on the auth page
-						// Needed because we pass in tokens from OAuth logins via URL fragments
-						if (page.url.pathname !== '/auth') {
-							// await goto('/auth');
-							window.location.href = '/auth';
-						}
+						// IBEX: No token yet — the Tauri backend injects the JWT into
+						// localStorage after authenticating with Open WebUI. The
+						// startup-complete event listener (registered above) will
+						// re-setup the socket and authenticate the session.
+						// Do NOT redirect to /auth:
+						// 1. That creates a DIFFERENT user (not ibex-admin) via auto-signin
+						// 2. window.location.href destroys event listeners (full page reload)
+						console.log('IBEX: No token in localStorage — waiting for Tauri backend to inject JWT');
 					}
 				}
+			} else if (page.url.pathname === '/settings' || page.url.pathname === '/setup') {
+				// IBEX: Settings/Setup can render even without backend
+				console.log('IBEX page loading without backend config');
 			} else {
 				// Redirect to /error when Backend Not Detected
 				await goto(`/error`);
@@ -259,6 +329,9 @@
 
 			// Unlisten to Open in Main Window event
 			unlistenOpenInMainWindow();
+
+			// Unlisten to startup complete event
+			if (unlistenStartupComplete) unlistenStartupComplete();
 		};
 	});
 </script>
@@ -269,6 +342,14 @@
 <Draggable />
 {#if loaded || $WEBUI_BASE_URL === ''}
 	<slot />
+{:else}
+	<!-- Branded loading screen while connecting to backend after setup -->
+	<div class="fixed inset-0 flex flex-col items-center justify-center bg-white dark:bg-gray-900 z-50">
+		<img src="/static/splash.png" class="h-20 w-auto dark:invert" alt="IBEX" />
+		<div class="mt-4 text-lg font-bold tracking-widest text-gray-800 dark:text-gray-100" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; letter-spacing: 0.15em;">IBEX</div>
+		<div class="mt-1 text-xs tracking-wide text-gray-400 dark:text-gray-500" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">Integration Bridge for EXtended systems</div>
+		<div class="mt-8 w-6 h-6 border-2 border-gray-200 dark:border-gray-700 rounded-full animate-spin" style="border-top-color: #3b82f6;"></div>
+	</div>
 {/if}
 {#if IS_MAIN_WINDOW}
 	<Toaster

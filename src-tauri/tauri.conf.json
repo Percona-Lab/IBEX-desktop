@@ -55,7 +55,8 @@
 			"exceptionDomain": "",
 			"frameworks": []
 		},
-		"resources": [],
+		"externalBin": ["binaries/node"],
+		"resources": ["resources/ibex-servers/**/*"],
 		"targets": "all",
 		"icon": [
 			"icons/32x32.png",

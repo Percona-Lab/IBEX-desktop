@@ -5,6 +5,7 @@
 
 use crate::config::IbexConfig;
 use std::collections::HashMap;
+use std::net::TcpListener;
 use std::path::PathBuf;
 use tokio::process::{Child, Command};
 
@@ -106,8 +107,14 @@ fn build_env(config: &IbexConfig) -> HashMap<String, String> {
     if let Some(ref v) = config.salesforce_instance_url {
         env.insert("SALESFORCE_INSTANCE_URL".to_string(), v.clone());
     }
-    if let Some(ref v) = config.salesforce_access_token {
-        env.insert("SALESFORCE_ACCESS_TOKEN".to_string(), v.clone());
+    if let Some(ref v) = config.salesforce_username {
+        env.insert("SALESFORCE_USERNAME".to_string(), v.clone());
+    }
+    if let Some(ref v) = config.salesforce_password {
+        env.insert("SALESFORCE_PASSWORD".to_string(), v.clone());
+    }
+    if let Some(ref v) = config.salesforce_security_token {
+        env.insert("SALESFORCE_SECURITY_TOKEN".to_string(), v.clone());
     }
 
     env
@@ -201,6 +208,48 @@ pub async fn health_check(port: u16) -> bool {
         .await
         .map(|r| r.status().is_success())
         .unwrap_or(false)
+}
+
+/// Check if a TCP port is available for binding.
+/// Returns Ok(()) if available, Err(description) if already in use.
+pub fn check_port_available(port: u16) -> Result<(), String> {
+    match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(_) => Ok(()), // Port is free; the listener drops immediately
+        Err(_) => {
+            let process_info = identify_port_user(port);
+            Err(format!(
+                "Port {port} is already in use{}. Please free this port and restart IBEX.",
+                if let Some(info) = process_info {
+                    format!(" by {info}")
+                } else {
+                    String::new()
+                }
+            ))
+        }
+    }
+}
+
+/// Best-effort: identify what process is using a port (macOS only).
+fn identify_port_user(port: u16) -> Option<String> {
+    let output = std::process::Command::new("lsof")
+        .args(["-i", &format!(":{port}"), "-sTCP:LISTEN", "-P", "-n"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Parse first data line: COMMAND PID USER ...
+        stdout.lines().nth(1).map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                format!("{} (PID {})", parts[0], parts[1])
+            } else {
+                line.to_string()
+            }
+        })
+    } else {
+        None
+    }
 }
 
 /// Health check all known servers, returning name → healthy status.

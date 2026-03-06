@@ -168,9 +168,19 @@
 		}
 		const model = $models.find((m) => m.id === selectedModels[0]);
 		if (model) {
-			selectedToolIds = (model?.info?.meta?.toolIds ?? []).filter((id) =>
-				$tools.find((t) => t.id === id)
-			);
+			const modelToolIds = model?.info?.meta?.toolIds ?? [];
+			if (modelToolIds.length > 0) {
+				// Model has specific tools configured — use those
+				selectedToolIds = modelToolIds.filter((id) =>
+					$tools.find((t) => t.id === id)
+				);
+			} else if ($tools && $tools.length > 0) {
+				// No model-specific tools — auto-select all MCP server tools
+				// so IBEX connectors (Slack, Notion, Jira) are always available
+				selectedToolIds = $tools
+					.filter((t) => t.id.startsWith('server:mcp:'))
+					.map((t) => t.id);
+			}
 		}
 	};
 
@@ -567,7 +577,11 @@
 		const userSettings = await getUserSettings(localStorage.token);
 
 		if (userSettings) {
-			settings.set(userSettings.ui);
+			const merged = {
+					...(userSettings.ui ?? {}),
+					system: userSettings.ui?.system ?? userSettings.system ?? ''
+				};
+			settings.set(merged);
 		} else {
 			settings.set(JSON.parse(localStorage.getItem('settings') ?? '{}'));
 		}
@@ -607,7 +621,11 @@
 				const userSettings = await getUserSettings(localStorage.token);
 
 				if (userSettings) {
-					await settings.set(userSettings.ui);
+					const merged = {
+					...(userSettings.ui ?? {}),
+					system: userSettings.ui?.system ?? userSettings.system ?? ''
+				};
+					await settings.set(merged);
 				} else {
 					await settings.set(JSON.parse(localStorage.getItem('settings') ?? '{}'));
 				}
@@ -670,7 +688,7 @@
 				...(m.sources ? { sources: m.sources } : {})
 			})),
 			chat_id: chatId,
-			session_id: $socket?.id,
+			session_id: $socket?.id ?? '',
 			id: responseMessageId
 		}).catch((error) => {
 			toast.error(error);
@@ -725,7 +743,7 @@
 			})),
 			...(event ? { event: event } : {}),
 			chat_id: chatId,
-			session_id: $socket?.id,
+			session_id: $socket?.id ?? '',
 			id: responseMessageId
 		}).catch((error) => {
 			toast.error(error);
@@ -1031,7 +1049,8 @@
 					if ($settings?.memory ?? false) {
 						if (userContext === null) {
 							const res = await queryMemory(localStorage.token, prompt).catch((error) => {
-								toast.error(error);
+								// Don't show toast for "no memories" — it's normal on fresh installs
+								console.log('Memory query:', error);
 								return null;
 							});
 							if (res) {
@@ -1230,7 +1249,7 @@
 			keep_alive: $settings.keepAlive ?? undefined,
 			tool_ids: selectedToolIds.length > 0 ? selectedToolIds : undefined,
 			files: files.length > 0 ? files : undefined,
-			session_id: $socket?.id,
+			session_id: $socket?.id ?? '',
 			chat_id: $chatId,
 			id: responseMessageId
 		});
@@ -1358,7 +1377,7 @@
 									if ($settings.notificationEnabled && !document.hasFocus()) {
 										const notification = new Notification(`${model.id}`, {
 											body: responseMessage.content,
-											icon: `${$WEBUI_BASE_URL}/static/favicon.png`
+											icon: '/ibex-icon.png'
 										});
 									}
 
@@ -1610,7 +1629,7 @@
 					max_tokens: params?.max_tokens ?? $settings?.params?.max_tokens ?? undefined,
 					tool_ids: selectedToolIds.length > 0 ? selectedToolIds : undefined,
 					files: files.length > 0 ? files : undefined,
-					session_id: $socket?.id,
+					session_id: $socket?.id ?? '',
 					chat_id: $chatId,
 					id: responseMessageId
 				},
@@ -1714,7 +1733,7 @@
 				if ($settings.notificationEnabled && !document.hasFocus()) {
 					const notification = new Notification(`${model.id}`, {
 						body: responseMessage.content,
-						icon: `${$WEBUI_BASE_URL}/static/favicon.png`
+						icon: '/ibex-icon.png'
 					});
 				}
 

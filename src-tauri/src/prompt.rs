@@ -6,51 +6,89 @@
 use crate::config::IbexConfig;
 
 /// Build the system prompt based on configured connectors.
-/// Output matches the bash build_system_prompt() function.
+/// Tool names here match what Open WebUI exposes to the LLM:
+/// the server ID (e.g. "slack") is prepended to each tool name
+/// (e.g. "search_messages") → "slack_search_messages".
 pub fn build_system_prompt(config: &IbexConfig) -> String {
-    let mut prompt = String::from("You have access to workplace tools via IBEX:\n");
+    let mut prompt = String::from(
+        "You are IBEX, a workplace AI assistant with access to real-time company tools.\n\
+         \n\
+         IMPORTANT RULES:\n\
+         - When the user asks about work data (messages, tickets, pages, records), ALWAYS use the relevant tool. Never guess.\n\
+         - You may need to chain multiple tool calls. For example: search first, then get details.\n\
+         - If a tool returns an error, tell the user what went wrong.\n\
+         - If the user asks about a system not listed below, tell them that connector is not configured.\n",
+    );
 
     if config.is_slack_configured() {
-        prompt.push_str("\n- Slack: search messages, read channels, list channels, read threads");
+        prompt.push_str(
+            "\n## Slack Tools\n\
+             Use these to find and read Slack messages:\n\
+             - **slack_search_messages**(query, count?) — Search messages across all channels. Use this FIRST for any Slack question.\n\
+             - **slack_get_channel_history**(channel_id, limit?) — Get recent messages from a specific channel. Requires a channel_id.\n\
+             - **slack_list_channels**(types?) — List channels with their IDs. Use when you need to find a channel_id.\n\
+             - **slack_get_thread**(channel_id, thread_ts) — Get all replies in a thread.\n\
+             \n\
+             Slack workflow: To find what someone said → use search_messages. To read a channel → list_channels to get the ID, then get_channel_history.\n",
+        );
     }
 
     if config.is_notion_configured() {
-        prompt.push_str("\n- Notion: search pages, read content, query databases");
+        prompt.push_str(
+            "\n## Notion Tools\n\
+             Use these to find and read Notion pages:\n\
+             - **notion_search**(query, filter?) — Search pages and databases by keyword.\n\
+             - **notion_get_page**(page_id) — Get a full Notion page with all content.\n\
+             - **notion_get_block_children**(block_id, recursive?) — Get child blocks of a page or block.\n\
+             - **notion_query_database**(database_id, filter?, sorts?) — Query a Notion database with filters.\n",
+        );
     }
 
     if config.is_jira_configured() {
         prompt.push_str(
-            "\n- Jira: search issues with JQL, read issue details and comments, list projects",
+            "\n## Jira Tools\n\
+             Use these to find and read Jira issues:\n\
+             - **jira_search_issues**(jql, max_results?) — Search issues using JQL. Examples: 'assignee = currentUser()', 'project = PROJ AND status = Open'.\n\
+             - **jira_get_issue**(issue_key) — Get full details of an issue (e.g. 'PROJ-1234').\n\
+             - **jira_get_projects**() — List all accessible Jira projects.\n",
         );
     }
 
     if config.is_servicenow_configured() {
-        prompt.push_str("\n- ServiceNow: query tables, get records, list tables");
+        prompt.push_str(
+            "\n## ServiceNow Tools\n\
+             - **servicenow_query_table**(table, query?, fields?, limit?) — Query a table (e.g. incident, sys_user).\n\
+             - **servicenow_get_record**(table, sys_id) — Get a specific record.\n\
+             - **servicenow_list_tables**() — List common tables.\n",
+        );
     }
 
     if config.is_salesforce_configured() {
         prompt.push_str(
-            "\n- Salesforce: run SOQL queries, get records, search across objects, describe schemas",
+            "\n## Salesforce Tools\n\
+             - **salesforce_soql_query**(query, limit?) — Run a SOQL query.\n\
+             - **salesforce_get_record**(object_type, record_id, fields?) — Get a record.\n\
+             - **salesforce_search**(query, limit?) — Global search across objects.\n\
+             - **salesforce_describe_object**(object_type) — Get schema/fields of an object.\n\
+             - **salesforce_list_objects**() — List available objects.\n",
         );
     }
 
     if config.is_memory_configured() {
-        prompt.push_str("\n- Memory: read/write persistent memory (GitHub-backed)");
-        prompt.push_str("\n");
-        prompt.push_str("\nMemory usage:");
-        prompt.push_str("\n- Use memory_get when the user references previous context, asks \"what do you know\", or needs background on a project");
-        prompt.push_str("\n- Use memory_update when the user says \"remember this\", \"save this\", or asks you to store any information — this is the user's personal memory and they decide what goes in it");
-        prompt.push_str("\n- CRITICAL: Before EVERY memory_update, you MUST call memory_get first. The memory file may contain important content from other sessions. Read it, merge your changes into the existing content, then write the complete updated markdown. Never overwrite blindly.");
         prompt.push_str(
-            "\n- Keep memory organized with ## headings and bullet points",
-        );
-        prompt.push_str(
-            "\n- Do not call memory_get at the start of every conversation — only when context is needed",
+            "\n## Memory Tools\n\
+             Persistent memory stored in GitHub:\n\
+             - **memory_get**() — Read current memory contents.\n\
+             - **memory_update**(content, message?) — Replace memory with new markdown.\n\
+             \n\
+             Memory rules:\n\
+             - Use memory_get when the user references previous context or asks \"what do you know\".\n\
+             - Use memory_update when the user says \"remember this\" or \"save this\".\n\
+             - CRITICAL: Before EVERY memory_update, call memory_get first. Read existing content, merge changes, then write complete markdown.\n\
+             - Keep memory organized with ## headings and bullet points.\n\
+             - Do not call memory_get at the start of every conversation — only when context is needed.\n",
         );
     }
-
-    prompt.push_str("\n");
-    prompt.push_str("\nWhen the user asks about their work data (messages, tickets, pages, records), ALWAYS use the relevant tool to look it up. Never guess or answer from memory — the tools have real-time access to live data. If the user asks about a system not listed here, let them know that connector is not configured.");
 
     prompt
 }
@@ -74,7 +112,8 @@ mod tests {
         let mut config = IbexConfig::default();
         config.slack_token = Some("xoxp-test".to_string());
         let prompt = build_system_prompt(&config);
-        assert!(prompt.contains("Slack: search messages"));
+        assert!(prompt.contains("slack_search_messages"));
+        assert!(prompt.contains("slack_get_channel_history"));
         assert!(!prompt.contains("Jira"));
     }
 
@@ -93,7 +132,8 @@ mod tests {
         config.servicenow_username = Some("admin".to_string());
         config.servicenow_password = Some("pass".to_string());
         config.salesforce_instance_url = Some("https://test.my.salesforce.com".to_string());
-        config.salesforce_access_token = Some("sf_token".to_string());
+        config.salesforce_username = Some("admin@test.com".to_string());
+        config.salesforce_password = Some("pass".to_string());
 
         let prompt = build_system_prompt(&config);
         assert!(prompt.contains("Slack"));

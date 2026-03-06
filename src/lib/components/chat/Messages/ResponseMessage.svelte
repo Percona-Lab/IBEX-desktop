@@ -484,24 +484,12 @@
 		>
 			<ProfileImage
 				src={model?.info?.meta?.profile_image_url ??
-					($i18n.language === 'dg-DG' ? `/doge.png` : `${$WEBUI_BASE_URL}/static/favicon.png`)}
+					($i18n.language === 'dg-DG' ? `/doge.png` : '/ibex-icon.png')}
 				className={'size-8'}
 			/>
 		</div>
 
 		<div class="flex-auto w-0 pl-1" data-tauri-drag-region>
-			<Name>
-				{model?.name ?? message.model}
-
-				{#if message.timestamp}
-					<span
-						class=" self-center invisible group-hover:visible text-gray-400 text-xs font-medium uppercase ml-0.5 -mt-0.5"
-					>
-						{dayjs(message.timestamp * 1000).format($i18n.t('h:mm a'))}
-					</span>
-				{/if}
-			</Name>
-
 			<div>
 				{#if message?.files && message.files?.filter((f) => f.type === 'image').length > 0}
 					<div class="my-2.5 w-full flex overflow-x-auto gap-2 flex-wrap">

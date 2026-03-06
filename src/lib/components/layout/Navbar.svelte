@@ -180,10 +180,11 @@
 						>
 							<div class=" self-center">
 								<img
-									src={$user.profile_image_url}
+									src={$user.profile_image_url || '/ibex-icon.png'}
 									class="size-6 object-cover rounded-full"
 									alt="User profile"
 									draggable="false"
+									on:error={(e) => { e.target.src = '/ibex-icon.png'; }}
 								/>
 							</div>
 						</button>

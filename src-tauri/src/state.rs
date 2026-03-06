@@ -60,6 +60,12 @@ pub struct AppState {
 
     /// Open WebUI base URL
     pub webui_url: Mutex<String>,
+
+    /// Whether the startup sequence completed successfully
+    pub startup_complete: Mutex<bool>,
+
+    /// Startup error message (if startup failed)
+    pub startup_error: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -74,6 +80,8 @@ impl AppState {
             app_health: Mutex::new(AppHealth::Starting),
             jwt_token: Mutex::new(None),
             webui_url: Mutex::new("http://localhost:8080".to_string()),
+            startup_complete: Mutex::new(false),
+            startup_error: Mutex::new(None),
         }
     }
 

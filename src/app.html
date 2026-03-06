@@ -86,7 +86,8 @@
 
 		<div
 			id="splash-screen"
-			style="position: fixed; z-index: 100; top: 0; left: 0; width: 100%; height: 100%"
+			style="position: fixed; z-index: 100; top: 0; left: 0; width: 100%; height: 100%;
+				display: flex; flex-direction: column; align-items: center; justify-content: center;"
 		>
 			<style type="text/css" nonce="">
 				html {
@@ -96,68 +97,37 @@
 
 			<img
 				id="logo"
-				style="
-					position: absolute;
-					width: auto;
-					height: 6rem;
-					top: 44%;
-					left: 50%;
-					transform: translateX(-50%);
-				"
+				style="width: auto; height: 5rem;"
 				src="/static/splash.png"
 			/>
 
-			<div
-				style="
-					position: absolute;
-					top: 33%;
-					left: 50%;
+			<div id="splash-title" style="
+				margin-top: 1rem;
+				font-size: 1.5rem;
+				font-weight: 700;
+				letter-spacing: 0.15em;
+				color: #171717;
+				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+			">IBEX</div>
 
-					width: 24rem;
-					transform: translateX(-50%);
+			<div id="splash-tagline" style="
+				margin-top: 0.35rem;
+				font-size: 0.8rem;
+				font-weight: 400;
+				letter-spacing: 0.05em;
+				color: #888;
+				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+			">Integration Bridge for EXtended systems</div>
 
-					display: flex;
-					flex-direction: column;
-					align-items: center;
-				"
-			>
-				<img
-					id="logo-her"
-					style="width: auto; height: 13rem"
-					src="/static/splash.png"
-					class="animate-pulse-fast"
-				/>
-
-				<div style="position: relative; width: 24rem; margin-top: 0.5rem">
-					<div
-						id="progress-background"
-						style="
-							position: absolute;
-							width: 100%;
-							height: 0.75rem;
-
-							border-radius: 9999px;
-							background-color: #fafafa9a;
-						"
-					></div>
-
-					<div
-						id="progress-bar"
-						style="
-							position: absolute;
-							width: 0%;
-							height: 0.75rem;
-							border-radius: 9999px;
-							background-color: #fff;
-						"
-						class="bg-white"
-					></div>
-				</div>
-			</div>
-
-			<!-- <span style="position: absolute; bottom: 32px; left: 50%; margin: -36px 0 0 -36px">
-				Footer content
-			</span> -->
+			<div id="splash-spinner" style="
+				margin-top: 2rem;
+				width: 1.5rem;
+				height: 1.5rem;
+				border: 2px solid #e5e7eb;
+				border-top-color: #3b82f6;
+				border-radius: 50%;
+				animation: splash-spin 0.8s linear infinite;
+			"></div>
 		</div>
 	</body>
 </html>
@@ -172,63 +142,27 @@
 	}
 
 	html.dark #splash-screen {
-		background: #000;
+		background: #111;
 	}
 
 	html.dark #splash-screen img {
 		filter: invert(1);
 	}
 
-	html.her #splash-screen {
-		background: #983724;
+	html.dark #splash-title {
+		color: #f0f0f0 !important;
 	}
 
-	#logo-her {
-		display: none;
+	html.dark #splash-tagline {
+		color: #777 !important;
 	}
 
-	#progress-background {
-		display: none;
+	html.dark #splash-spinner {
+		border-color: #333 !important;
+		border-top-color: #3b82f6 !important;
 	}
 
-	#progress-bar {
-		display: none;
-	}
-
-	html.her #logo {
-		display: none;
-	}
-
-	html.her #logo-her {
-		display: block;
-		filter: invert(1);
-	}
-
-	html.her #progress-background {
-		display: block;
-	}
-
-	html.her #progress-bar {
-		display: block;
-	}
-
-	@media (max-width: 24rem) {
-		html.her #progress-background {
-			display: none;
-		}
-
-		html.her #progress-bar {
-			display: none;
-		}
-	}
-
-	@keyframes pulse {
-		50% {
-			opacity: 0.65;
-		}
-	}
-
-	.animate-pulse-fast {
-		animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+	@keyframes splash-spin {
+		to { transform: rotate(360deg); }
 	}
 </style>

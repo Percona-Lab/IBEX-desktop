@@ -4,14 +4,20 @@
 //! Menu: Docker status, each server + port, Open WebUI link, Settings, Quit.
 
 use crate::state::{AppHealth, AppState};
+use tauri::image::Image;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Create the system tray icon and menu.
 pub fn setup_tray(app: &AppHandle) -> Result<TrayIcon, String> {
+    // Load ibex icon for menu bar (embedded at compile time)
+    let icon = Image::from_bytes(include_bytes!("../icons/tray-icon@2x.png"))
+        .map_err(|e| format!("Failed to load tray icon: {e}"))?;
+
     let tray = TrayIconBuilder::new()
-        .title("IBEX")
+        .icon(icon)
+        .icon_as_template(true) // macOS auto-adjusts for light/dark mode
         .tooltip("IBEX — Starting...")
         .on_tray_icon_event(|tray_icon, event| {
             if let tauri::tray::TrayIconEvent::Click {
@@ -41,6 +47,9 @@ fn handle_menu_event(app: &AppHandle, menu_id: &str) {
         "open_webui" => {
             show_main_window(app);
         }
+        "connectors" => {
+            open_connectors_window(app);
+        }
         "settings" => {
             open_settings_window(app);
         }
@@ -63,6 +72,34 @@ fn show_main_window(app: &AppHandle) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+    }
+}
+
+/// Open the connectors/setup wizard window, or focus it if already open.
+fn open_connectors_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("connectors") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    } else {
+        match tauri::WebviewWindowBuilder::new(
+            app,
+            "connectors",
+            tauri::WebviewUrl::App("/setup".into()),
+        )
+        .title("IBEX — Connectors")
+        .inner_size(640.0, 700.0)
+        .min_inner_size(500.0, 400.0)
+        .resizable(true)
+        .minimizable(true)
+        .build()
+        {
+            Ok(_) => {
+                log::info!("Connectors window opened");
+            }
+            Err(e) => {
+                log::error!("Failed to open connectors window: {e}");
+            }
+        }
     }
 }
 
@@ -106,16 +143,6 @@ pub fn update_tray_menu(app: &AppHandle, tray: &TrayIcon) -> Result<(), String> 
     };
     tray.set_tooltip(Some(tooltip))
         .map_err(|e| format!("Failed to set tooltip: {e}"))?;
-
-    // Update title (shown next to icon in macOS menu bar)
-    let title = match health {
-        AppHealth::Healthy => "IBEX",
-        AppHealth::Degraded => "IBEX \u{26a0}",
-        AppHealth::Error => "IBEX \u{2717}",
-        AppHealth::Starting => "IBEX \u{2026}",
-    };
-    tray.set_title(Some(title))
-        .map_err(|e| format!("Failed to set title: {e}"))?;
 
     // Build menu
     let docker_status = state.docker_status.lock().unwrap().clone();
@@ -180,7 +207,7 @@ pub fn update_tray_menu(app: &AppHandle, tray: &TrayIcon) -> Result<(), String> 
             .map_err(|e| format!("Menu error: {e}"))?,
     );
     builder = builder.item(
-        &MenuItemBuilder::with_id("settings", "Settings\u{2026}")
+        &MenuItemBuilder::with_id("connectors", "Connectors\u{2026}")
             .build(app)
             .map_err(|e| format!("Menu error: {e}"))?,
     );
