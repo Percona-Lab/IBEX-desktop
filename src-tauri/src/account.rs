@@ -255,8 +255,19 @@ pub async fn push_system_prompt(
         .send()
         .await
     {
-        Ok(resp) => resp.json().await.unwrap_or(serde_json::json!({})),
-        Err(_) => serde_json::json!({}),
+        Ok(resp) => {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            log::info!(
+                "User settings response ({status}): {}",
+                &text[..text.len().min(300)]
+            );
+            serde_json::from_str(&text).unwrap_or(serde_json::json!({}))
+        }
+        Err(e) => {
+            log::info!("Failed to fetch user settings: {e}");
+            serde_json::json!({})
+        }
     };
 
     // Merge system prompt into existing settings
@@ -307,6 +318,11 @@ pub async fn push_system_prompt(
     // LLM backends finish loading, discovers a non-preferred model (e.g.
     // qwen3-coder-30b). When restart_servers() calls us again later, we
     // upgrade to the preferred model (e.g. qwen3.5-35b) if it's now available.
+    log::info!(
+        "Model selection: settings keys={:?}",
+        settings.as_object().map(|m| m.keys().collect::<Vec<_>>())
+    );
+
     if let serde_json::Value::Object(ref mut map) = settings {
         let current_models = map
             .get("models")
@@ -325,14 +341,37 @@ pub async fn push_system_prompt(
             })
             .unwrap_or(false);
 
+        log::info!(
+            "Model selection: has_models={has_models}, current_is_preferred={current_is_preferred}, current={:?}",
+            current_models.first().and_then(|m| m.as_str())
+        );
+
         if !has_models {
-            // Case 1: No model — full discovery with retries
+            // Case 1: No model — full discovery with retries.
+            //
+            // Only save the model to user settings if it's the preferred one.
+            // If we only find a non-preferred model (e.g., qwen3-coder-30b
+            // because the preferred model hasn't loaded yet), DON'T save it.
+            // Let the DEFAULT_MODELS env var ("qwen3.5:35b") handle the UI
+            // default instead. This prevents the wrong model from being
+            // persisted — restart_servers will call us again later when the
+            // preferred model is available.
             if let Some(model_id) = discover_first_model(&client, base_url, jwt).await {
-                log::info!("Setting default model: {model_id}");
-                map.insert(
-                    "models".to_string(),
-                    serde_json::json!([model_id]),
-                );
+                let is_preferred = PREFERRED_MODEL_PATTERNS
+                    .iter()
+                    .any(|p| model_id.to_lowercase().contains(p));
+                if is_preferred {
+                    log::info!("Setting preferred default model: {model_id}");
+                    map.insert(
+                        "models".to_string(),
+                        serde_json::json!([model_id]),
+                    );
+                } else {
+                    log::info!(
+                        "Discovered model '{model_id}' but not preferred — \
+                         leaving settings.models unset so DEFAULT_MODELS env var takes effect"
+                    );
+                }
             }
         } else if !current_is_preferred {
             // Case 2: Non-preferred model set — quick check for preferred
@@ -394,26 +433,52 @@ async fn discover_preferred_model(
 ) -> Option<String> {
     let url = format!("{base_url}/api/models");
 
-    let resp = client
+    let resp = match client
         .get(&url)
         .header("Authorization", format!("Bearer {jwt}"))
         .send()
         .await
-        .ok()?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            log::info!("Preferred model check: request failed: {e}");
+            return None;
+        }
+    };
 
-    let body: serde_json::Value = resp.json().await.ok()?;
-    let models = body.get("data")?.as_array()?;
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            log::info!("Preferred model check: failed to parse response: {e}");
+            return None;
+        }
+    };
+
+    let models = match body.get("data").and_then(|d| d.as_array()) {
+        Some(m) => m,
+        None => {
+            log::info!("Preferred model check: no 'data' array in response");
+            return None;
+        }
+    };
+
+    log::info!("Preferred model check: {} models available", models.len());
 
     for pattern in PREFERRED_MODEL_PATTERNS {
         for model in models {
             if let Some(id) = model.get("id").and_then(|v| v.as_str()) {
                 if id.to_lowercase().contains(pattern) {
+                    log::info!("Preferred model check: found match: {id}");
                     return Some(id.to_string());
                 }
             }
         }
     }
 
+    log::info!(
+        "Preferred model check: no match for patterns {:?}",
+        PREFERRED_MODEL_PATTERNS
+    );
     None
 }
 
@@ -449,7 +514,7 @@ async fn discover_first_model(
         {
             Ok(r) => r,
             Err(e) => {
-                log::debug!("Failed to query models (attempt {}): {e}", attempt + 1);
+                log::info!("Model discovery: failed to query /api/models (attempt {}): {e}", attempt + 1);
                 continue;
             }
         };
@@ -457,7 +522,7 @@ async fn discover_first_model(
         let body: serde_json::Value = match resp.json().await {
             Ok(v) => v,
             Err(e) => {
-                log::debug!("Failed to parse models response (attempt {}): {e}", attempt + 1);
+                log::info!("Model discovery: failed to parse response (attempt {}): {e}", attempt + 1);
                 continue;
             }
         };
@@ -466,7 +531,7 @@ async fn discover_first_model(
         let models = match body.get("data").and_then(|d| d.as_array()) {
             Some(m) if !m.is_empty() => m,
             _ => {
-                log::debug!("No models available yet (attempt {})", attempt + 1);
+                log::info!("Model discovery: no models available yet (attempt {})", attempt + 1);
                 continue;
             }
         };
@@ -541,7 +606,84 @@ pub async fn push_tool_connections(
         return Err(format!("Push tool connections failed ({status}): {body}"));
     }
 
+    // Log response body to see which connections Open WebUI accepted
+    let resp_body = resp.text().await.unwrap_or_default();
     let count = connections.as_array().map(|a| a.len()).unwrap_or(0);
     log::info!("Pushed {count} tool server connections to Open WebUI");
+    if !resp_body.is_empty() {
+        let preview = &resp_body[..resp_body.len().min(500)];
+        log::info!("Tool server push response: {preview}");
+    }
+
+    // Verify what Open WebUI actually registered
+    match client
+        .get(&url)
+        .header("Authorization", format!("Bearer {jwt}"))
+        .send()
+        .await
+    {
+        Ok(verify_resp) => {
+            if let Ok(body) = verify_resp.text().await {
+                let preview = &body[..body.len().min(500)];
+                log::info!("Verified tool_servers config: {preview}");
+            }
+        }
+        Err(e) => log::warn!("Failed to verify tool_servers: {e}"),
+    }
+
+    // Wait for Open WebUI to finish discovering tools from each MCP server.
+    //
+    // When we POST connections, Open WebUI connects to each MCP server and
+    // calls tools/list to discover available tools. This happens asynchronously.
+    // If the frontend fetches getTools() before discovery completes, it sees
+    // fewer tools than expected (e.g., 3 out of 6).
+    //
+    // Poll the tools API until all expected server:mcp:* tools are registered.
+    if count > 0 {
+        let tools_url = format!("{base_url}/api/v1/tools/");
+        for attempt in 1..=10u32 {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+            match client
+                .get(&tools_url)
+                .header("Authorization", format!("Bearer {jwt}"))
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    if let Ok(tools) = resp.json::<Vec<serde_json::Value>>().await {
+                        let mcp_count = tools
+                            .iter()
+                            .filter(|t| {
+                                t.get("id")
+                                    .and_then(|id| id.as_str())
+                                    .map(|id| id.starts_with("server:mcp:"))
+                                    .unwrap_or(false)
+                            })
+                            .count();
+
+                        log::info!(
+                            "Tool registration check {attempt}/10: {mcp_count}/{count} MCP tools registered"
+                        );
+
+                        if mcp_count >= count {
+                            log::info!("All {count} MCP tools registered successfully");
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::info!("Tool registration check {attempt}/10 failed: {e}");
+                }
+            }
+
+            if attempt == 10 {
+                log::warn!(
+                    "Not all MCP tools registered after 15s — frontend may show incomplete list"
+                );
+            }
+        }
+    }
+
     Ok(())
 }

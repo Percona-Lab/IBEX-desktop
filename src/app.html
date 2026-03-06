@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" style="background:#111">
 	<head>
 		<meta charset="utf-8" />
 		<link rel="icon" type="image/png" href="/favicon/favicon-96x96.png" sizes="96x96" />
@@ -81,7 +81,7 @@
 		%sveltekit.head%
 	</head>
 
-	<body data-sveltekit-preload-data="hover">
+	<body data-sveltekit-preload-data="hover" style="background:#111">
 		<div style="display: contents">%sveltekit.body%</div>
 
 		<div
@@ -91,7 +91,7 @@
 		>
 			<style type="text/css" nonce="">
 				html {
-					overflow-y: scroll !important;
+					overflow-y: hidden !important;
 				}
 			</style>
 
@@ -106,7 +106,7 @@
 				font-size: 1.5rem;
 				font-weight: 700;
 				letter-spacing: 0.15em;
-				color: #171717;
+				color: #f0f0f0;
 				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 			">IBEX</div>
 
@@ -123,7 +123,7 @@
 				margin-top: 2rem;
 				width: 1.5rem;
 				height: 1.5rem;
-				border: 2px solid #e5e7eb;
+				border: 2px solid #333;
 				border-top-color: #3b82f6;
 				border-radius: 50%;
 				animation: splash-spin 0.8s linear infinite;
@@ -135,30 +135,41 @@
 <style type="text/css" nonce="">
 	html {
 		overflow-y: hidden !important;
+		/* Dark-first background prevents white flash during page reloads.
+		   Overridden by html.light below for light theme users. */
+		background: #111 !important;
+	}
+
+	html.light {
+		background: #fff !important;
 	}
 
 	#splash-screen {
-		background: #fff;
-	}
-
-	html.dark #splash-screen {
 		background: #111;
 	}
 
-	html.dark #splash-screen img {
+	#splash-screen img {
 		filter: invert(1);
 	}
 
-	html.dark #splash-title {
-		color: #f0f0f0 !important;
+	html.light #splash-screen {
+		background: #fff;
 	}
 
-	html.dark #splash-tagline {
-		color: #777 !important;
+	html.light #splash-screen img {
+		filter: none;
 	}
 
-	html.dark #splash-spinner {
-		border-color: #333 !important;
+	html.light #splash-title {
+		color: #171717 !important;
+	}
+
+	html.light #splash-tagline {
+		color: #888 !important;
+	}
+
+	html.light #splash-spinner {
+		border-color: #e5e7eb !important;
 		border-top-color: #3b82f6 !important;
 	}
 

@@ -325,8 +325,31 @@
 		const store = await getStore(APP_STORE_FILE);
 		await store?.set('webui_base_url', 'http://localhost:8080');
 		await store?.save();
-		$WEBUI_BASE_URL = 'http://localhost:8080';
-		goto('/', { replaceState: true });
+
+		// Inject fresh JWT before reload.
+		// restart_servers() may have recreated the container, which generates
+		// a new JWT. The old localStorage token could be stale.
+		try {
+			const jwt: string | null = await invoke('get_jwt_token');
+			if (jwt) {
+				localStorage.setItem('token', jwt);
+			}
+		} catch (e) {
+			console.warn('Failed to get JWT for reload:', e);
+		}
+
+		// Show the branded splash screen before navigating so the user sees
+		// a smooth transition instead of a blank/flashing screen.
+		const splash = document.getElementById('splash-screen');
+		if (splash) splash.style.display = 'flex';
+
+		// Full page reload instead of SvelteKit client-side goto().
+		// Layout.svelte's onMount returned early during /setup (no backend
+		// init) and won't re-run on a client-side navigation. A full reload
+		// forces Layout to re-initialize: fetch config, tools, models, set
+		// up socket, etc. — so all 6 tool toggles and the correct default
+		// model appear immediately.
+		window.location.href = '/';
 	}
 
 	onMount(async () => {
