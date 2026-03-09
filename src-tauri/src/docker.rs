@@ -206,6 +206,14 @@ pub async fn create_container(config: &IbexConfig) -> Result<String, String> {
     // push_system_prompt.
     env.push("WEBUI_SECRET_KEY=ibex-desktop-local-secret-key".to_string());
 
+    // Disable WebSocket transport — use HTTP polling for socket.io instead.
+    // WKWebView (Tauri's macOS webview) cannot establish WebSocket connections
+    // to the Docker container reliably. With ENABLE_WEBSOCKET_SUPPORT=true
+    // (the default), the socket.io server only accepts WebSocket transport,
+    // causing the client's polling handshake to fail with 400 "Invalid transport"
+    // in a continuous retry loop. Polling is perfectly adequate for a local app.
+    env.push("ENABLE_WEBSOCKET_SUPPORT=false".to_string());
+
     // Default model fallback — Open WebUI uses this if no model is set via API.
     // Belt-and-suspenders: the Rust code also discovers and sets the model via
     // push_system_prompt(), but this env var ensures a sensible default even if
@@ -376,6 +384,15 @@ async fn needs_recreation(config: &IbexConfig) -> (bool, bool) {
             if !has_auth_false {
                 log::info!("Container needs recreation: WEBUI_AUTH=false not set");
                 return (true, true); // was_auth_enabled = true → need DB reset
+            }
+
+            // Recreate if WebSocket support wasn't explicitly disabled
+            let has_ws_disabled = env_vars
+                .iter()
+                .any(|e| e == "ENABLE_WEBSOCKET_SUPPORT=false");
+            if !has_ws_disabled {
+                log::info!("Container needs recreation: ENABLE_WEBSOCKET_SUPPORT=false not set");
+                return (true, false);
             }
 
             // Recreate if LLM backend env vars are missing

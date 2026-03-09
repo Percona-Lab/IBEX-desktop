@@ -92,6 +92,9 @@
 	let processing = '';
 	let messagesContainerElement: HTMLDivElement;
 
+	let chatStatus: 'idle' | 'generating' | 'done' | 'error' = 'idle';
+	let chatStatusTimer: ReturnType<typeof setTimeout> | null = null;
+
 	let navbarElement;
 
 	let showEventConfirmation = false;
@@ -439,6 +442,7 @@
 		chatIdUnsubscriber?.();
 		window.removeEventListener('message', onMessageHandler);
 		$socket?.off('chat-events');
+		if (chatStatusTimer) clearTimeout(chatStatusTimer);
 	});
 
 	// File upload functions
@@ -1016,6 +1020,10 @@
 		parentId: string,
 		{ modelId = null, modelIdx = null, newChat = false } = {}
 	) => {
+		// Reset status from previous message
+		if (chatStatusTimer) clearTimeout(chatStatusTimer);
+		chatStatus = 'idle';
+
 		// Create new chat if newChat is true and first user message
 		if (
 			newChat &&
@@ -1150,6 +1158,7 @@
 
 	const sendPromptOllama = async (model, userPrompt, responseMessageId, _chatId) => {
 		let _response: string | null = null;
+		chatStatus = 'generating';
 
 		const responseMessage = history.messages[responseMessageId];
 		const userMessage = history.messages[responseMessage.parentId];
@@ -1456,6 +1465,7 @@
 				}
 			}
 		} else {
+			chatStatus = 'error';
 			if (res !== null) {
 				const error = await res.json();
 				console.log(error);
@@ -1496,6 +1506,11 @@
 		);
 
 		stopResponseFlag = false;
+		if (chatStatus !== 'error') {
+			chatStatus = 'done';
+			if (chatStatusTimer) clearTimeout(chatStatusTimer);
+			chatStatusTimer = setTimeout(() => { chatStatus = 'idle'; }, 3000);
+		}
 		await tick();
 
 		let lastMessageContentPart =
@@ -1541,6 +1556,7 @@
 
 	const sendPromptOpenAI = async (model, userPrompt, responseMessageId, _chatId) => {
 		let _response = null;
+		chatStatus = 'generating';
 
 		const responseMessage = history.messages[responseMessageId];
 		const userMessage = history.messages[responseMessage.parentId];
@@ -1815,6 +1831,11 @@
 		);
 
 		stopResponseFlag = false;
+		if (chatStatus !== 'error') {
+			chatStatus = 'done';
+			if (chatStatusTimer) clearTimeout(chatStatusTimer);
+			chatStatusTimer = setTimeout(() => { chatStatus = 'idle'; }, 3000);
+		}
 		await tick();
 
 		let lastMessageContentPart =
@@ -1859,6 +1880,7 @@
 	};
 
 	const handleOpenAIError = async (error, res: Response | null, model, responseMessage) => {
+		chatStatus = 'error';
 		let errorMessage = '';
 		let innerError;
 
@@ -2359,6 +2381,20 @@
 						</div>
 
 						<div class=" pb-[1rem]">
+							{#if chatStatus !== 'idle'}
+								<div class="flex items-center justify-center gap-2 py-1.5 text-xs">
+									{#if chatStatus === 'generating'}
+										<div class="animate-pulse size-2 rounded-full bg-green-500" />
+										<span class="text-gray-500 dark:text-gray-400">Generating response…</span>
+									{:else if chatStatus === 'done'}
+										<div class="size-2 rounded-full bg-blue-500" />
+										<span class="text-gray-500 dark:text-gray-400">Response complete</span>
+									{:else if chatStatus === 'error'}
+										<div class="size-2 rounded-full bg-red-500" />
+										<span class="text-red-500 dark:text-red-400">Error generating response</span>
+									{/if}
+								</div>
+							{/if}
 							<MessageInput
 								{history}
 								{selectedModels}
