@@ -8,6 +8,23 @@ Built with [Tauri 2](https://tauri.app/) (Rust + Svelte), wrapping [Open WebUI](
 
 ---
 
+## Install
+
+### Prerequisites
+
+- **macOS** (Apple Silicon or Intel)
+- **[Docker Desktop](https://www.docker.com/products/docker-desktop/)** — must be installed and running. IBEX Desktop manages an Open WebUI container and connects to Docker via its Unix socket.
+
+### Download
+
+1. Download the latest `.dmg` from [Releases](https://github.com/Percona-Lab/IBEX-desktop/releases)
+2. Open the DMG and drag **IBEX.app** to Applications
+3. Launch IBEX — the first-run setup wizard will walk you through configuration
+
+Everything else (Node.js runtime, MCP servers, account creation) is bundled and handled automatically.
+
+---
+
 ## What It Does
 
 - Wraps Open WebUI in a native macOS window (WKWebView, not a browser)
