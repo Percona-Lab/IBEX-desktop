@@ -12,16 +12,35 @@ Built with [Tauri 2](https://tauri.app/) (Rust + Svelte), wrapping [Open WebUI](
 
 ### Prerequisites
 
-- **macOS** (Apple Silicon or Intel)
-- **[Docker Desktop](https://www.docker.com/products/docker-desktop/)** — must be installed and running. IBEX Desktop manages an Open WebUI container and connects to Docker via its Unix socket.
+| Requirement | Details |
+|---|---|
+| **macOS** | 10.13 (High Sierra) or later — Apple Silicon and Intel both supported |
+| **Docker Desktop** | [Download here](https://www.docker.com/products/docker-desktop/) — must be installed and **running** before first launch |
+| **Disk space** | ~2–3 GB free (for the Open WebUI Docker image + data) |
+| **Internet** | Required for pulling the Docker image and connecting to LLM APIs |
 
-### Download
+> **Note for Percona employees:** Connecting to the Percona VPN gives access to internal Ollama instances. The setup wizard checks for this but it's optional — external LLM endpoints work without VPN.
+
+### What's Bundled (no separate install needed)
+
+- Node.js runtime (native ARM64 / Intel)
+- MCP connector servers (Slack, Jira, Notion, ServiceNow, Salesforce, Memory)
+- Open WebUI frontend
+- Admin account auto-creation (credentials stored in macOS Keychain)
+
+### Download & Install
 
 1. Download the latest `.dmg` from [Releases](https://github.com/Percona-Lab/IBEX-desktop/releases)
 2. Open the DMG and drag **IBEX.app** to Applications
-3. Launch IBEX — the first-run setup wizard will walk you through configuration
+3. Make sure Docker Desktop is running
+4. Launch IBEX — the first-run setup wizard will walk you through configuration
 
-Everything else (Node.js runtime, MCP servers, account creation) is bundled and handled automatically.
+### First-Run Setup
+
+The setup wizard will:
+1. **Check dependencies** — verifies Docker is running (and optionally checks Percona VPN)
+2. **Configure connectors** — enter API tokens for the services you want to connect (Slack, Jira, Notion, etc.). All connectors are optional and can be configured later from Settings.
+3. **Provision automatically** — creates an admin account, pulls the Open WebUI Docker image, and starts MCP servers
 
 ---
 

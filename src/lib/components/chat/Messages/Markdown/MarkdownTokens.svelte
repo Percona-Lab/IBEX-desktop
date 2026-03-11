@@ -184,8 +184,8 @@
 			</ul>
 		{/if}
 	{:else if token.type === 'details'}
-		<Collapsible title={token.summary} className="w-fit space-y-1">
-			<div class=" mb-1.5" slot="content">
+		<Collapsible title={token.summary} className="w-fit space-y-1" open={!token.isThinking}>
+			<div class=" mb-1.5 {token.isThinking ? 'text-gray-500 dark:text-gray-400 text-sm italic' : ''}" slot="content">
 				<svelte:self id={`${id}-${tokenIdx}-d`} tokens={marked.lexer(token.text)} />
 			</div>
 		</Collapsible>

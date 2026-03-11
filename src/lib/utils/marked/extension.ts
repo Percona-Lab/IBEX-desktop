@@ -1,14 +1,20 @@
 // Helper function to find matching closing tag
+// openTag can be a prefix like '<details' to match '<details>' and '<details attr="...">'
 function findMatchingClosingTag(src, openTag, closeTag) {
 	let depth = 1;
-	let index = openTag.length;
+	// Skip past the first opening tag
+	const firstClose = src.indexOf('>');
+	let index = firstClose + 1;
 	while (depth > 0 && index < src.length) {
-		if (src.startsWith(openTag, index)) {
-			depth++;
-		} else if (src.startsWith(closeTag, index)) {
+		if (src.startsWith(closeTag, index)) {
 			depth--;
-		}
-		if (depth > 0) {
+			if (depth === 0) break;
+			index += closeTag.length;
+		} else if (src.startsWith(openTag, index) && !src.startsWith(closeTag, index)) {
+			// Nested open tag (but not a closing tag that shares the prefix)
+			depth++;
+			index++;
+		} else {
 			index++;
 		}
 	}
@@ -16,15 +22,24 @@ function findMatchingClosingTag(src, openTag, closeTag) {
 }
 
 function detailsTokenizer(src) {
-	const detailsRegex = /^<details>\n/;
+	// Match <details> with optional attributes (e.g. <details type="reasoning" done="true">)
+	const detailsRegex = /^<details(\s[^>]*)?>(\n|$)/;
 	const summaryRegex = /^<summary>(.*?)<\/summary>\n/;
 
-	if (detailsRegex.test(src)) {
-		const endIndex = findMatchingClosingTag(src, '<details>', '</details>');
+	const openMatch = detailsRegex.exec(src);
+	if (openMatch) {
+		const endIndex = findMatchingClosingTag(src, '<details', '</details>');
 		if (endIndex === -1) return;
 
 		const fullMatch = src.slice(0, endIndex);
-		let content = fullMatch.slice(10, -10).trim(); // Remove <details> and </details>
+		// Remove opening tag (variable length) and closing </details>
+		const openTagEnd = src.indexOf('>') + 1;
+		let content = fullMatch.slice(openTagEnd, -10).trim(); // -10 for </details>
+
+		// Parse attributes from the opening tag
+		const attrs = openMatch[1] || '';
+		const typeMatch = attrs.match(/type="([^"]*)"/);
+		const isThinking = typeMatch && typeMatch[1] === 'reasoning';
 
 		let summary = '';
 		const summaryMatch = summaryRegex.exec(content);
@@ -33,17 +48,23 @@ function detailsTokenizer(src) {
 			content = content.slice(summaryMatch[0].length).trim();
 		}
 
+		// For thinking/reasoning blocks, set a default summary
+		if (isThinking && !summary) {
+			summary = 'Thinking';
+		}
+
 		return {
 			type: 'details',
 			raw: fullMatch,
 			summary: summary,
-			text: content
+			text: content,
+			isThinking: isThinking
 		};
 	}
 }
 
 function detailsStart(src) {
-	return src.match(/^<details>/) ? 0 : -1;
+	return src.match(/^<details[\s>]/) ? 0 : -1;
 }
 
 function detailsRenderer(token) {
